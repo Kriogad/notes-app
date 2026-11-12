@@ -24,6 +24,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.height
@@ -214,6 +216,60 @@ private fun VaultList(host: Host, onOpen: (Long) -> Unit) {
     }
 }
 
+// ---------------- Настройки: напоминания ----------------
+
+@Composable
+private fun RemindSettings(host: Host) {
+    val ctx = LocalContext.current
+    var sound by remember { mutableStateOf(Reminders.soundTitle(ctx)) }
+    var insistent by remember { mutableStateOf(Reminders.insistent(ctx)) }
+    var nag by remember { mutableStateOf(Reminders.nagMinutes(ctx)) }
+    var nagMenu by remember { mutableStateOf(false) }
+    val nagOptions = listOf(0 to "Не напоминать", 5 to "Через 5 минут", 10 to "Через 10 минут",
+        15 to "Через 15 минут", 30 to "Через 30 минут", 60 to "Через час")
+
+    Text("Напоминания", style = MaterialTheme.typography.titleMedium)
+    OutlinedButton(onClick = {
+        host.pickSound(Reminders.soundUri(ctx)) { uri ->
+            Reminders.setSound(ctx, uri); sound = Reminders.soundTitle(ctx)
+        }
+    }, modifier = Modifier.fillMaxWidth()) { Text("Мелодия: $sound") }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Звенеть, пока не нажму")
+            Text("Мелодия повторяется, пока не тронете уведомление", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline)
+        }
+        Switch(checked = insistent, onCheckedChange = { insistent = it; Reminders.setInsistent(ctx, it) })
+    }
+    Text("Если смахнул и не отметил «Выполнено» — напомнить снова:")
+    Box {
+        OutlinedButton(onClick = { nagMenu = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(nagOptions.first { it.first == nag }.second)
+        }
+        DropdownMenu(expanded = nagMenu, onDismissRequest = { nagMenu = false }) {
+            nagOptions.forEach { (m, label) ->
+                DropdownMenuItem(text = { Text(label) }, onClick = { nag = m; Reminders.setNagMinutes(ctx, m); nagMenu = false })
+            }
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = {
+            host.askNotificationPermission()
+            if (!Reminders.test(ctx)) Toast.makeText(ctx, "Разрешите уведомления для приложения", Toast.LENGTH_LONG).show()
+        }) { Text("Проверить звук") }
+        OutlinedButton(onClick = {
+            // Некоторые телефоны (realme, Xiaomi…) усыпляют приложения и напоминания опаздывают
+            runCatching {
+                ctx.startActivity(
+                    android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        android.net.Uri.parse("package:${ctx.packageName}"))
+                )
+            }
+        }) { Text("Не усыплять") }
+    }
+}
+
 // ---------------- Настройки: резервная копия ----------------
 
 @Composable
@@ -261,6 +317,9 @@ fun SettingsScreen(host: Host, onBack: () -> Unit) {
                 }) { Text(if (bg == null) "Выбрать фото" else "Другое фото") }
                 if (bg != null) OutlinedButton(onClick = { Background.clear(ctx) }) { Text("Убрать фон") }
             }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
+            RemindSettings(host)
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
             Text("Резервная копия на Яндекс Диске", style = MaterialTheme.typography.titleMedium)

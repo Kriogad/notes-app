@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.media.RingtoneManager
 import androidx.activity.result.PickVisualMediaRequest
 import android.hardware.biometrics.BiometricManager
 import android.hardware.biometrics.BiometricPrompt
@@ -54,6 +55,26 @@ class MainActivity : ComponentActivity(), Host {
         filePicker.launch(arrayOf("*/*"))
     }
 
+    private var onSound: ((Uri?) -> Unit)? = null
+    private val soundPicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        if (r.resultCode == RESULT_OK) {
+            @Suppress("DEPRECATION")
+            onSound?.invoke(r.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI))
+        }
+    }
+
+    override fun pickSound(current: Uri?, onPicked: (Uri?) -> Unit) {
+        onSound = onPicked
+        soundPicker.launch(
+            Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
+                .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALL)
+                .putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Мелодия напоминания")
+                .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                .putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, current)
+        )
+    }
+
     private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (!ok) Toast.makeText(this, "Без разрешения напоминания не будут показаны", Toast.LENGTH_LONG).show()
     }
@@ -100,7 +121,11 @@ class MainActivity : ComponentActivity(), Host {
         intent.data?.let { if (Backup.handleRedirect(this, it)) Backup.schedule(this) }
         when {
             intent.getBooleanExtra(EXTRA_NEW, false) -> openRequest = NEW_NOTE
-            intent.hasExtra(EXTRA_OPEN) -> openRequest = intent.getLongExtra(EXTRA_OPEN, -1)
+            intent.hasExtra(EXTRA_OPEN) -> {
+                openRequest = intent.getLongExtra(EXTRA_OPEN, -1)
+                // Открыли из напоминания — значит увидели, больше не повторять
+                if (intent.getBooleanExtra(EXTRA_ACK, false)) Reminders.ack(this, openRequest!!)
+            }
         }
     }
 

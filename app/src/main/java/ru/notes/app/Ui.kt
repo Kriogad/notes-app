@@ -46,6 +46,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.RadioButton
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -140,6 +142,7 @@ interface Host {
     fun biometric(cipher: javax.crypto.Cipher, title: String, onOk: (javax.crypto.Cipher) -> Unit)
     fun pickPhotos(onPicked: (List<android.net.Uri>) -> Unit)
     fun pickFiles(onPicked: (List<android.net.Uri>) -> Unit)
+    fun pickSound(current: android.net.Uri?, onPicked: (android.net.Uri?) -> Unit)
 }
 
 // ---------------- Список, архив, поиск ----------------
@@ -280,7 +283,7 @@ fun NoteCard(note: Note, store: NoteStore, modifier: Modifier, maxItems: Int = 4
                 note.remindAt?.let {
                     val past = it < System.currentTimeMillis()
                     Text(
-                        "🔔 " + formatTime(it),
+                        "🔔 " + formatTime(it) + if (note.repeat != Repeat.NONE) " · ${note.repeat.label.lowercase()}" else "",
                         style = MaterialTheme.typography.labelMedium,
                         color = if (past) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(top = 4.dp),
@@ -306,6 +309,7 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
     var note by remember { mutableStateOf(store.get(id) ?: Note(id)) }
     var pickDate by remember { mutableStateOf(false) }
     var pickedDay by remember { mutableStateOf<Long?>(null) }
+    var pickedTime by remember { mutableStateOf<Long?>(null) }
     var askDelete by remember { mutableStateOf(false) }
     var attachMenu by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
@@ -367,11 +371,11 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                 note.remindAt?.let { at ->
                     AssistChip(
                         onClick = { pickDate = true },
-                        label = { Text(formatTime(at)) },
+                        label = { Text(formatTime(at) + if (note.repeat != Repeat.NONE) " ↻" else "") },
                         leadingIcon = { Icon(Icons.Filled.Notifications, null) },
                         modifier = Modifier.padding(start = 12.dp),
                     )
-                    IconButton(onClick = { note = note.copy(remindAt = null) }) {
+                    IconButton(onClick = { note = note.copy(remindAt = null, repeat = Repeat.NONE) }) {
                         Icon(Icons.Filled.Close, "Убрать напоминание")
                     }
                 }
@@ -461,7 +465,17 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                 val date = Instant.ofEpochMilli(day).atZone(ZoneOffset.UTC).toLocalDate()
                 val at = LocalDateTime.of(date, LocalTime.of(h, m))
                     .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                note = note.copy(remindAt = at, done = false)
+                pickedTime = at
+            },
+        )
+    }
+    pickedTime?.let { at ->
+        RepeatDialog(
+            initial = note.repeat,
+            onDismiss = { pickedTime = null },
+            onPick = { rep ->
+                pickedTime = null
+                note = note.copy(remindAt = at, repeat = rep, done = false)
                 host.askNotificationPermission()
             },
         )
@@ -511,6 +525,30 @@ private fun DayDialog(initial: Long?, onDismiss: () -> Unit, onPick: (Long) -> U
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
     ) { DatePicker(state) }
+}
+
+@Composable
+private fun RepeatDialog(initial: Repeat, onDismiss: () -> Unit, onPick: (Repeat) -> Unit) {
+    var sel by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Повторять") },
+        text = {
+            Column {
+                Repeat.entries.forEach { r ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().selectable(selected = sel == r, onClick = { sel = r }),
+                    ) {
+                        RadioButton(selected = sel == r, onClick = { sel = r })
+                        Text(r.label)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onPick(sel) }) { Text("Готово") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
+    )
 }
 
 @Composable

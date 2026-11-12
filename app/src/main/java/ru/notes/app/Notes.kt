@@ -31,6 +31,7 @@ data class Note(
     val remindAt: Long? = null,
     val updated: Long = System.currentTimeMillis(),
     val attachments: List<Attachment> = emptyList(),
+    val repeat: Repeat = Repeat.NONE,
 ) {
     val isBlank: Boolean
         get() = title.isBlank() && text.isBlank() && items.all { it.text.isBlank() } && attachments.isEmpty()
@@ -175,6 +176,7 @@ object Notes : NoteStore {
             n.items.forEach { put(JSONObject().put("t", it.text).put("c", it.checked)) }
         })
         .apply { n.remindAt?.let { put("remind", it) } }
+        .apply { if (n.repeat != Repeat.NONE) put("rep", n.repeat.key) }
         .apply {
             if (n.attachments.isNotEmpty()) put("att", JSONArray().apply {
                 n.attachments.forEach { put(JSONObject().put("f", it.file).put("n", it.name).put("m", it.mime)) }
@@ -191,6 +193,7 @@ object Notes : NoteStore {
         done = o.optBoolean("done"),
         remindAt = if (o.has("remind")) o.getLong("remind") else null,
         updated = o.optLong("updated"),
+        repeat = Repeat.of(o.optString("rep")),
         attachments = o.optJSONArray("att")?.let { a ->
             List(a.length()) { i -> a.getJSONObject(i).let { Attachment(it.getString("f"), it.optString("n"), it.optString("m")) } }
         } ?: emptyList(),
