@@ -2,6 +2,11 @@ package ru.notes.app
 
 import android.appwidget.AppWidgetManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.glance.action.Action
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -48,6 +53,7 @@ import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.action.actionRunCallback
+import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.appWidgetBackground
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.lazy.LazyColumn as GlanceLazyColumn
@@ -70,12 +76,25 @@ private val KeyNote = ActionParameters.Key<Long>("note")
 private val KeyIndex = ActionParameters.Key<Int>("index")
 private val KeyOpenNote = ActionParameters.Key<Long>(EXTRA_OPEN)
 
-/** Какой заметке принадлежит какой виджет. */
+/** Какой заметке принадлежит какой виджет. Flow — чтобы виджет сразу видел новый выбор. */
 object WidgetPrefs {
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("note_widgets", Context.MODE_PRIVATE)
-    fun get(ctx: Context, widgetId: Int) = prefs(ctx).getLong("w$widgetId", -1L)
-    fun set(ctx: Context, widgetId: Int, noteId: Long) = prefs(ctx).edit().putLong("w$widgetId", noteId).apply()
-    fun remove(ctx: Context, widgetId: Int) = prefs(ctx).edit().remove("w$widgetId").apply()
+    private var flow: MutableStateFlow<Map<Int, Long>>? = null
+
+    @Synchronized
+    fun all(ctx: Context): StateFlow<Map<Int, Long>> = flow ?: MutableStateFlow(
+        prefs(ctx).all.mapNotNull { (k, v) -> k.removePrefix("w").toIntOrNull()?.let { it to (v as Long) } }.toMap()
+    ).also { flow = it }
+
+    fun set(ctx: Context, widgetId: Int, noteId: Long) {
+        prefs(ctx).edit().putLong("w$widgetId", noteId).apply()
+        (all(ctx) as MutableStateFlow).value = all(ctx).value + (widgetId to noteId)
+    }
+
+    fun remove(ctx: Context, widgetId: Int) {
+        prefs(ctx).edit().remove("w$widgetId").apply()
+        (all(ctx) as MutableStateFlow).value = all(ctx).value - widgetId
+    }
 }
 
 /** Виджет одной заметки: пункты списка с галочками. */
@@ -84,13 +103,19 @@ class NoteWidget : GlanceAppWidget() {
         val widgetId = GlanceAppWidgetManager(context).getAppWidgetId(id)
         provideContent {
             val notes by Notes.notes.collectAsState()
-            val noteId = WidgetPrefs.get(context, widgetId)
-            GlanceTheme { Content(notes.find { it.id == noteId }) }
+            val links by WidgetPrefs.all(context).collectAsState()
+            val noteId = links[widgetId]
+            val pick = actionStartActivity(
+                Intent(context, NoteWidgetConfig::class.java)
+                    .setData(Uri.parse("notes://widget/$widgetId")) // у каждого виджета своя ссылка
+                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
+            )
+            GlanceTheme { Content(noteId, notes.find { it.id == noteId }, pick) }
         }
     }
 
     @Composable
-    private fun Content(note: Note?) {
+    private fun Content(noteId: Long?, note: Note?, pick: Action) {
         val onSurface = GlanceTheme.colors.onSurface
         GlanceColumn(
             GlanceModifier.glanceFillMaxSize().appWidgetBackground().cornerRadius(20.dp)
@@ -98,17 +123,18 @@ class NoteWidget : GlanceAppWidget() {
         ) {
             if (note == null) {
                 GlanceText(
-                    "Заметка удалена. Удалите виджет или выберите другую заметку (долгое нажатие на виджет).",
-                    style = TextStyle(onSurface),
+                    if (noteId == null) "Нажмите, чтобы выбрать заметку" else "Заметка удалена. Нажмите, чтобы выбрать другую",
+                    GlanceModifier.glanceFillMaxSize().clickable(pick),
+                    TextStyle(onSurface, fontSize = 15.sp),
                 )
             } else {
-                NoteBody(note)
+                NoteBody(note, pick)
             }
         }
     }
 
     @Composable
-    private fun NoteBody(note: Note) {
+    private fun NoteBody(note: Note, pick: Action) {
         val onSurface = GlanceTheme.colors.onSurface
         run {
             val open = actionStartActivity<MainActivity>(actionParametersOf(KeyOpenNote to note.id))
@@ -129,6 +155,11 @@ class NoteWidget : GlanceAppWidget() {
                         colorFilter = ColorFilter.tint(GlanceTheme.colors.primary),
                     )
                 }
+                Image(
+                    ImageProvider(R.drawable.ic_swap), "Выбрать другую заметку",
+                    GlanceModifier.size(40.dp).glancePadding(10.dp).clickable(pick),
+                    colorFilter = ColorFilter.tint(GlanceTheme.colors.onSurfaceVariant),
+                )
             }
             // Невыполненные пункты сверху, отмеченные — вниз (как в списке покупок)
             val rows = note.items.withIndex().filter { it.value.text.isNotBlank() }.sortedBy { it.value.checked }
