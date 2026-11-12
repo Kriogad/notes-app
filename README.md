@@ -13,8 +13,8 @@
 ## Как собрать
 **Android Studio:** File → Open → папка `Notes` → дождаться синхронизации → Run.
 
-**GitHub:** залить папку в репозиторий — вкладка Actions сама соберёт APK
-(Actions → последняя сборка → Artifacts → `notes-apk`).
+**GitHub:** каждая отправка кода собирает APK и публикует релиз.
+Свежий APK всегда здесь: https://github.com/Kriogad/notes-app/releases/latest/download/Notes.apk
 
 ## Устройство кода
 | Файл | Что внутри |

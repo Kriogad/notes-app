@@ -14,15 +14,26 @@ android {
         applicationId = "ru.notes.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // Номер сборки GitHub — чтобы каждая новая версия ставилась поверх старой
+        val build = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "1.$build"
+    }
+
+    // Постоянный ключ: без него Android не даст обновить приложение поверх старой версии
+    signingConfigs {
+        create("notes") {
+            storeFile = file("notes.jks")
+            storePassword = "notes123"
+            keyAlias = "notes"
+            keyPassword = "notes123"
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // Подпись debug-ключом, чтобы release-APK сразу ставился на телефон
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("notes")
         }
     }
     compileOptions {
