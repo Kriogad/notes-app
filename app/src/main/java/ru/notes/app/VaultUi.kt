@@ -24,6 +24,12 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -211,7 +217,7 @@ private fun VaultList(host: Host, onOpen: (Long) -> Unit) {
 // ---------------- Настройки: резервная копия ----------------
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(host: Host, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val status by Backup.status.collectAsState()
@@ -236,6 +242,27 @@ fun SettingsScreen(onBack: () -> Unit) {
             Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            Text("Фон главного экрана", style = MaterialTheme.typography.titleMedium)
+            val bg by Background.image.collectAsState()
+            LaunchedEffect(Unit) { Background.load(ctx) }
+            bg?.let {
+                Image(it, "Текущий фон", Modifier.fillMaxWidth().height(160.dp).clip(RoundedCornerShape(12.dp)),
+                    contentScale = ContentScale.Crop)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    host.pickPhotos { uris ->
+                        uris.firstOrNull()?.let { u ->
+                            scope.launch {
+                                if (!Background.set(ctx, u)) Toast.makeText(ctx, "Не удалось открыть фото", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                }) { Text(if (bg == null) "Выбрать фото" else "Другое фото") }
+                if (bg != null) OutlinedButton(onClick = { Background.clear(ctx) }) { Text("Убрать фон") }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
             Text("Резервная копия на Яндекс Диске", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Копия делается сама через минуту после любых изменений, когда есть интернет. " +

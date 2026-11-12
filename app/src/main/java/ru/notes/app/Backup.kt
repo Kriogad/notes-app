@@ -120,15 +120,22 @@ object Backup {
 
     private fun restoreAttachments(ctx: Context, token: String) {
         val sent = prefs(ctx).getStringSet("sent", emptySet())!!.toMutableSet()
-        Notes.notes.value.flatMap { it.attachments }.forEach { a ->
-            val f = Attachments.file(ctx, a)
-            if (f.exists()) return@forEach
+        // Берём список с Диска: секретные вложения из закрытого раздела иначе не узнать
+        val list = runCatching {
+            val c = request("GET", "$API?limit=100000&fields=_embedded.items.name&path=" + enc("app:/attachments"), token)
+            val items = JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+                .getJSONObject("_embedded").getJSONArray("items")
+            List(items.length()) { items.getJSONObject(it).getString("name") }
+        }.getOrDefault(emptyList())
+        list.forEach { name ->
+            val f = File(Attachments.dir(ctx), name)
+            if (f.exists()) { sent += name; return@forEach }
             runCatching {
-                val href = link(token, "$API/download?path=" + enc("app:/attachments/${a.file}"))
+                val href = link(token, "$API/download?path=" + enc("app:/attachments/$name"))
                 (URL(href).openConnection() as HttpURLConnection).inputStream.use { input ->
                     f.outputStream().use { input.copyTo(it) }
                 }
-                sent += a.file
+                sent += name
             }
         }
         prefs(ctx).edit().putStringSet("sent", sent.toSet()).apply()

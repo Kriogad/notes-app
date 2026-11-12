@@ -15,6 +15,8 @@ import java.io.File
 import java.security.KeyStore
 import java.security.SecureRandom
 import javax.crypto.Cipher
+import javax.crypto.CipherOutputStream
+import java.io.InputStream
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
@@ -67,6 +69,7 @@ object Vault : NoteStore {
 
     fun lock() {
         key = null
+        Attachments.clearViews(app)
         state.value = emptyList()
         unlocked.value = false
     }
@@ -149,7 +152,32 @@ object Vault : NoteStore {
     override fun upsert(note: Note) = commit(state.value.filter { it.id != note.id } + note)
 
     @Synchronized
-    override fun delete(id: Long) = commit(state.value.filter { it.id != id })
+    override fun delete(id: Long) {
+        get(id)?.attachments?.forEach { Attachments.delete(app, it) }
+        commit(state.value.filter { it.id != id })
+    }
+
+    // ---------- файлы вложений: [12 байт IV][шифротекст + тег] ----------
+
+    fun encryptTo(input: InputStream, out: File): Boolean {
+        val k = key ?: return false
+        val c = Cipher.getInstance("AES/GCM/NoPadding").apply { init(Cipher.ENCRYPT_MODE, k) }
+        out.outputStream().use { o ->
+            o.write(c.iv)
+            CipherOutputStream(o, c).use { input.copyTo(it) }
+        }
+        return true
+    }
+
+    fun decrypt(f: File): ByteArray? {
+        val k = key ?: return null
+        return runCatching {
+            val all = f.readBytes()
+            val c = Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(Cipher.DECRYPT_MODE, k, GCMParameterSpec(128, all, 0, 12))
+            c.doFinal(all, 12, all.size - 12)
+        }.getOrNull()
+    }
 
     override fun setDone(id: Long, done: Boolean) {
         get(id)?.let { upsert(it.copy(done = done)) }

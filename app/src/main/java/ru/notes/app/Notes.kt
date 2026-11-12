@@ -18,6 +18,8 @@ data class CheckItem(val text: String, val checked: Boolean = false)
 /** Вложение: файл лежит в filesDir/attachments/[file], [name] — исходное имя для показа. */
 data class Attachment(val file: String, val name: String, val mime: String) {
     val isImage get() = mime.startsWith("image/")
+    /** Зашифровано ключом секретного раздела. */
+    val secret get() = file.endsWith(".enc")
 }
 
 data class Note(

@@ -53,6 +53,9 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
@@ -110,7 +113,7 @@ fun NotesApp(host: Host, openRequest: Long?, onOpenHandled: () -> Unit) {
         id != null && (!secret || vaultOpen) -> key(id) {
             EditorScreen(id, if (secret) Vault else Notes, secret, host, onClose = { editing = null })
         }
-        section == Section.Settings -> SettingsScreen(onBack = { section = Section.Main })
+        section == Section.Settings -> SettingsScreen(host, onBack = { section = Section.Main })
         secret -> VaultScreen(
             host,
             onBack = { Vault.lock(); section = Section.Main },
@@ -166,10 +169,19 @@ private fun ListScreen(
     BackHandler(enabled = searching || archive) {
         if (searching) { searching = false; query = "" } else archive = false
     }
+    val ctx = LocalContext.current
+    val bg by Background.image.collectAsState()
+    LaunchedEffect(Unit) { Background.load(ctx) }
 
+    Box(Modifier.fillMaxSize()) {
+    bg?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
     Scaffold(
+        containerColor = if (bg != null) Color.Transparent else MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = if (bg != null) 0.85f else 1f)
+                ),
                 title = {
                     when {
                         searching -> {
@@ -228,6 +240,7 @@ private fun ListScreen(
                 }
             }
         }
+    }
     }
 }
 
@@ -299,7 +312,7 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
     val scope = rememberCoroutineScope()
     val onPicked: (List<android.net.Uri>) -> Unit = { uris ->
         scope.launch {
-            val new = uris.mapNotNull { Attachments.import(ctx, it) }
+            val new = uris.mapNotNull { Attachments.import(ctx, it, secret) }
             if (new.size < uris.size) Toast.makeText(ctx, "Не все файлы удалось прикрепить", Toast.LENGTH_LONG).show()
             note = note.copy(attachments = note.attachments + new)
         }
@@ -328,7 +341,7 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                     IconButton(onClick = {
                         host.listen { t -> note = note.copy(text = if (note.text.isBlank()) t else note.text.trimEnd() + "\n" + t) }
                     }) { Icon(painterResource(R.drawable.ic_mic), "Надиктовать текст") }
-                    if (!secret) Box {
+                    Box {
                         IconButton(onClick = { attachMenu = true }) { Icon(painterResource(R.drawable.ic_attach), "Прикрепить") }
                         DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
                             DropdownMenuItem(text = { Text("Фото из галереи") }, onClick = { attachMenu = false; host.pickPhotos(onPicked) })
