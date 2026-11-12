@@ -30,6 +30,9 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
             <!-- Возврат из входа в Яндекс -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -66,7 +69,7 @@
         <activity
             android:name=".VoiceActivity"
             android:excludeFromRecents="true"
-            android:exported="false"
+            android:exported="true"
             android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
@@ -103,6 +106,17 @@
             android:name=".SoundService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+
+        <service
+            android:name=".VoiceTile"
+            android:exported="true"
+            android:icon="@drawable/ic_mic"
+            android:label="@string/shortcut_voice"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
         <receiver
             android:name=".ReminderReceiver"

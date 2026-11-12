@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Заметки</string>
+    <string name="shortcut_voice">Голосовая заметка</string>
+    <string name="shortcut_new">Новая заметка</string>
     <string name="widget_description">Список заметок с галочками</string>
     <string name="widget_list_name">Все заметки</string>
     <string name="widget_note_name">Одна заметка (список покупок)</string>

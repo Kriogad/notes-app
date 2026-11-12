@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Settings
@@ -47,6 +48,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.zIndex
@@ -135,6 +140,7 @@ fun NotesApp(host: Host, openRequest: Long?, onOpenHandled: () -> Unit) {
             EditorScreen(id, if (secret) Vault else Notes, secret, host, onClose = { editing = null }, onOpen = { editing = it })
         }
         section == Section.Settings -> SettingsScreen(host, onBack = { section = Section.Main })
+        section == Section.Calendar -> CalendarScreen(host, onBack = { section = Section.Main }, onOpen = { editing = it })
         secret -> VaultScreen(
             host,
             onBack = { Vault.lock(); section = Section.Main },
@@ -147,11 +153,12 @@ fun NotesApp(host: Host, openRequest: Long?, onOpenHandled: () -> Unit) {
             onNew = { editing = System.currentTimeMillis() },
             onVault = { section = Section.Vault },
             onSettings = { section = Section.Settings },
+            onCalendar = { section = Section.Calendar },
         )
     }
 }
 
-enum class Section { Main, Vault, Settings }
+enum class Section { Main, Vault, Settings, Calendar }
 
 /** Что экранам нужно от Activity. */
 interface Host {
@@ -178,30 +185,33 @@ private fun ListScreen(
     onNew: () -> Unit,
     onVault: () -> Unit,
     onSettings: () -> Unit,
+    onCalendar: () -> Unit,
 ) {
-    var archive by rememberSaveable { mutableStateOf(false) }
     var searching by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
-    val archived = notes.count { it.done }
+    val archived = notes.filter { it.done }.sortedByDescending { it.doneAt ?: it.updated }
     var askClear by remember { mutableStateOf(false) }
     if (askClear) AlertDialog(
         onDismissRequest = { askClear = false },
         title = { Text("Очистить архив?") },
-        text = { Text("Удалятся все выполненные заметки ($archived) вместе с фото, включая историю повторяющихся.") },
+        text = { Text("Удалятся все выполненные заметки (${archived.size}) вместе с фото, включая историю повторяющихся.") },
         confirmButton = {
-            TextButton(onClick = { notes.filter { it.done }.forEach { Notes.delete(it.id) }; askClear = false }) { Text("Удалить всё") }
+            TextButton(onClick = { archived.forEach { Notes.delete(it.id) }; askClear = false }) { Text("Удалить всё") }
         },
         dismissButton = { TextButton(onClick = { askClear = false }) { Text("Отмена") } },
     )
 
-    // Поиск идёт по всем заметкам, включая архив
-    val shown = when {
-        searching -> if (query.isBlank()) emptyList() else notes.filter { it.matches(query.trim()) }
-        archive -> notes.filter { it.done }.sortedByDescending { it.doneAt ?: it.updated }
-        else -> notes.filter { !it.done }
-    }
-    BackHandler(enabled = searching || archive) {
-        if (searching) { searching = false; query = "" } else archive = false
+    // Три экрана свайпом, как рабочие столы
+    val active = notes.filter { !it.done }
+    val tabs = listOf(
+        "Текучка" to active.filter { !it.isRecurring },
+        "Повторы" to active.filter { it.isRecurring },
+        "Архив" to archived,
+    )
+    val pager = rememberPagerState { tabs.size }
+    val tabScope = rememberCoroutineScope()
+    BackHandler(enabled = searching || pager.currentPage != 0) {
+        if (searching) { searching = false; query = "" } else tabScope.launch { pager.animateScrollToPage(0) }
     }
     val ctx = LocalContext.current
     val bg by Background.image.collectAsState()
@@ -217,27 +227,25 @@ private fun ListScreen(
                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = if (bg != null) 0.85f else 1f)
                 ),
                 title = {
-                    when {
-                        searching -> {
-                            val focus = remember { FocusRequester() }
-                            LaunchedEffect(Unit) { focus.requestFocus() }
-                            PlainField(query, { query = it }, "Поиск", MaterialTheme.typography.titleMedium,
-                                Modifier.fillMaxWidth().focusRequester(focus))
-                        }
-                        archive -> Text("Архив")
-                        else -> Text("Заметки")
-                    }
+                    if (searching) {
+                        val focus = remember { FocusRequester() }
+                        LaunchedEffect(Unit) { focus.requestFocus() }
+                        PlainField(query, { query = it }, "Поиск", MaterialTheme.typography.titleMedium,
+                            Modifier.fillMaxWidth().focusRequester(focus))
+                    } else Text("Заметки")
                 },
                 navigationIcon = {
-                    if (searching || archive) IconButton(onClick = {
-                        if (searching) { searching = false; query = "" } else archive = false
-                    }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
+                    if (searching) IconButton(onClick = { searching = false; query = "" }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад")
+                    }
                 },
                 actions = {
-                    if (archive && !searching && archived > 0) TextButton(onClick = { askClear = true }) { Text("Очистить") }
-                    if (!searching) IconButton(onClick = { searching = true }) { Icon(Icons.Filled.Search, "Поиск") }
-                    if (!searching && !archive) {
-                        TextButton(onClick = { archive = true }) { Text("Архив ($archived)") }
+                    if (!searching) {
+                        if (pager.currentPage == 2 && archived.isNotEmpty()) {
+                            TextButton(onClick = { askClear = true }) { Text("Очистить") }
+                        }
+                        IconButton(onClick = { searching = true }) { Icon(Icons.Filled.Search, "Поиск") }
+                        IconButton(onClick = onCalendar) { Icon(Icons.Filled.DateRange, "Календарь") }
                         IconButton(onClick = onVault) { Icon(Icons.Filled.Lock, "Секретные заметки") }
                         IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, "Настройки и резервная копия") }
                     }
@@ -245,41 +253,35 @@ private fun ListScreen(
             )
         },
         floatingActionButton = {
-            if (!searching && !archive) {
+            if (!searching && pager.currentPage != 2) {
                 FloatingActionButton(onClick = onNew) { Icon(Icons.Filled.Add, "Новая заметка") }
             }
         },
     ) { pad ->
-        val empty = when {
-            searching -> if (query.isBlank()) "Введите слово для поиска" else "Ничего не найдено"
-            archive -> "В архиве пусто.\nСюда попадают выполненные заметки."
-            else -> "Заметок пока нет.\nНажмите +, чтобы добавить."
-        }
-        if (searching || archive) {
-            NoteList(shown, empty, Modifier.padding(pad), host, onOpen)
+        if (searching) {
+            // Поиск идёт по всем заметкам, включая архив
+            val found = if (query.isBlank()) emptyList() else notes.filter { it.matches(query.trim()) }
+            NoteList(found, if (query.isBlank()) "Введите слово для поиска" else "Ничего не найдено",
+                Modifier.padding(pad), host, onOpen)
         } else {
-            // Вкладки: обычные заметки и повторяющиеся (листаются свайпом)
-            val active = notes.filter { !it.done }
-            val tabs = listOf(
-                "Текучка" to active.filter { !it.isRecurring },
-                "Повторяющиеся" to active.filter { it.isRecurring },
-            )
-            val pager = rememberPagerState { tabs.size }
-            val tabScope = rememberCoroutineScope()
             Column(Modifier.padding(pad)) {
                 PrimaryTabRow(selectedTabIndex = pager.currentPage, containerColor = Color.Transparent) {
                     tabs.forEachIndexed { i, (title, list) ->
                         Tab(
                             selected = pager.currentPage == i,
                             onClick = { tabScope.launch { pager.animateScrollToPage(i) } },
-                            text = { Text("$title (${list.size})") },
+                            text = { Text("$title (${list.size})", maxLines = 1) },
                         )
                     }
                 }
                 HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
                     NoteList(
                         tabs[page].second,
-                        if (page == 0) empty else "Здесь будут заметки с повтором: «каждый месяц», «каждый день»…\nПовтор ставится в напоминании 🔔.",
+                        when (page) {
+                            0 -> "Заметок пока нет.\nНажмите +, чтобы добавить."
+                            1 -> "Здесь будут заметки с повтором: «каждый месяц», «каждый день»…\nПовтор ставится в напоминании 🔔."
+                            else -> "В архиве пусто.\nСюда попадают выполненные заметки."
+                        },
                         Modifier, host, onOpen,
                     )
                 }
@@ -597,6 +599,9 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
             }
 
             PlainField(note.text, { note = note.copy(text = it) }, "Текст заметки", MaterialTheme.typography.bodyLarge)
+            if (!secret && (note.repeat != Repeat.NONE || note.series != 0L)) {
+                ReadingField(note) { note = note.copy(reading = it) }
+            }
 
             fun remove(a: Attachment) {
                 Attachments.delete(ctx, a)
@@ -765,25 +770,101 @@ private fun DayDialog(initial: Long?, onDismiss: () -> Unit, onPick: (Long) -> U
     ) { DatePicker(state) }
 }
 
-/** Прошлые разы повторяющейся заметки (с фото) — например, показания счётчика по месяцам. */
+private val numFmt = java.text.NumberFormat.getNumberInstance(java.util.Locale("ru")).apply { maximumFractionDigits = 3 }
+fun fmtNum(d: Double): String = numFmt.format(d)
+private fun fmtDelta(d: Double) = (if (d >= 0) "+" else "−") + fmtNum(kotlin.math.abs(d))
+private val dayFmt = DateTimeFormatter.ofPattern("d MMM")
+private fun fmtDay(ms: Long) = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).format(dayFmt)
+
+/** Поле «Показание счётчика» у повторяющейся заметки, с расходом относительно прошлого раза. */
+@Composable
+private fun ReadingField(note: Note, onChange: (Double?) -> Unit) {
+    val all by Notes.notes.collectAsState()
+    val prev = all.filter { it.done && it.seriesId == note.seriesId && it.id != note.id && it.reading != null && it.doneAt != null }
+        .maxByOrNull { it.doneAt!! }
+    var text by remember { mutableStateOf(note.reading?.let { fmtNum(it).replace('\u00A0', ' ') } ?: "") }
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+        OutlinedTextField(
+            value = text,
+            onValueChange = { v ->
+                text = v
+                onChange(v.replace(" ", "").replace('\u00A0'.toString(), "").replace(',', '.').toDoubleOrNull())
+            },
+            label = { Text("Показание счётчика") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        prev?.let { p ->
+            val cur = note.reading
+            Text(
+                "Прошлый раз (${fmtDay(p.doneAt!!)}): ${fmtNum(p.reading!!)}" +
+                    (cur?.let { "   расход: ${fmtDelta(it - p.reading)}" } ?: ""),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+    }
+}
+
+/** Прошлые разы повторяющейся заметки (с фото и показаниями) — например, счётчики по месяцам. */
 @Composable
 private fun History(note: Note, onOpen: (Long) -> Unit) {
     val all by Notes.notes.collectAsState()
     val history = all.filter { it.done && it.doneAt != null && it.id != note.id && it.seriesId == note.seriesId }
         .sortedByDescending { it.doneAt }
     if (history.isEmpty()) return
+    // Расход: разница с предыдущим показанием (по времени)
+    val chrono = history.filter { it.reading != null }.reversed()
+    val delta = chrono.zipWithNext { a, b -> b.id to b.reading!! - a.reading!! }.toMap()
+
     Text("История (${history.size})", style = MaterialTheme.typography.titleMedium,
         modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp))
+    if (delta.size >= 2) UsageChart(chrono.filter { it.id in delta }.takeLast(12).map { fmtDay(it.doneAt!!) to delta[it.id]!! })
     history.forEach { h ->
         Card(onClick = { onOpen(h.id) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(8.dp)) {
                 h.attachments.firstOrNull { it.isImage }?.let { Thumb(it, 56.dp) }
                 Column(Modifier.weight(1f).padding(start = 12.dp)) {
                     Text("✓ " + formatTime(h.doneAt!!), style = MaterialTheme.typography.titleSmall)
-                    val about = h.text.lineSequence().firstOrNull { it.isNotBlank() }
+                    val about = h.reading?.let { r -> fmtNum(r) + (delta[h.id]?.let { "  (${fmtDelta(it)})" } ?: "") }
+                        ?: h.text.lineSequence().firstOrNull { it.isNotBlank() }
                         ?: "📎 ${h.attachments.size}".takeIf { h.attachments.isNotEmpty() } ?: ""
                     if (about.isNotBlank()) Text(about, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+}
+
+/** Столбики расхода по месяцам. */
+@Composable
+private fun UsageChart(data: List<Pair<String, Double>>) {
+    val max = data.maxOf { kotlin.math.abs(it.second) }.takeIf { it > 0 } ?: 1.0
+    val avg = data.map { it.second }.average()
+    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Text("Расход · в среднем ${fmtNum(avg)}", style = MaterialTheme.typography.labelLarge)
+            Row(
+                Modifier.fillMaxWidth().height(150.dp).padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                data.forEach { (label, v) ->
+                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(fmtNum(v), style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                        // Заметно больше среднего — выделяем: может, что-то течёт
+                        val high = v > avg * 1.3 && data.size >= 3
+                        Box(
+                            Modifier.fillMaxWidth().height((100 * kotlin.math.abs(v) / max).dp.coerceAtLeast(2.dp))
+                                .background(
+                                    if (high) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                    RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp),
+                                )
+                        )
+                        Text(label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                    }
                 }
             }
         }
@@ -851,7 +932,7 @@ private fun RepeatDialog(
 }
 
 @Composable
-private fun TimeDialog(initial: Long?, onDismiss: () -> Unit, onPick: (Int, Int) -> Unit) {
+fun TimeDialog(initial: Long?, onDismiss: () -> Unit, onPick: (Int, Int) -> Unit) {
     val t = initial?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalTime() }
         ?: LocalTime.now().plusHours(1).withMinute(0)
     var h by remember { mutableStateOf(t.hour) }

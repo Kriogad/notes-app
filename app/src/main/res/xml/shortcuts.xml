@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:icon="@drawable/ic_shortcut_mic"
+        android:shortcutId="voice"
+        android:shortcutShortLabel="@string/shortcut_voice">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="ru.notes.app.VoiceActivity"
+            android:targetPackage="ru.notes.app" />
+    </shortcut>
+    <shortcut
+        android:icon="@drawable/ic_shortcut_add"
+        android:shortcutId="new_note"
+        android:shortcutShortLabel="@string/shortcut_new">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetClass="ru.notes.app.MainActivity"
+            android:targetPackage="ru.notes.app">
+            <extra android:name="new_note" android:value="true" />
+        </intent>
+    </shortcut>
+</shortcuts>

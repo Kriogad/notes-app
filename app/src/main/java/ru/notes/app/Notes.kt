@@ -52,6 +52,8 @@ data class Note(
     val due: Boolean = false,
     /** Место в списке (перетаскивание пальцем). Меньше — выше. */
     val pos: Double? = null,
+    /** Показание счётчика (для повторяющихся заметок). */
+    val reading: Double? = null,
 ) {
     val seriesId get() = if (series == 0L) id else series
 
@@ -161,7 +163,7 @@ object Notes : NoteStore {
         val fresh = note.copy(
             id = now, series = note.seriesId, done = false, doneAt = null, due = false,
             remindAt = nextAt,
-            attachments = emptyList(), items = note.items.map { it.copy(checked = false) }, updated = now,
+            attachments = emptyList(), items = note.items.map { it.copy(checked = false) }, updated = now, reading = null,
         )
         Reminders.cancelAll(app, note)
         commit(state.value.filter { it.id != note.id } + archived + fresh)
@@ -266,6 +268,7 @@ object Notes : NoteStore {
         .apply { n.doneAt?.let { put("da", it) } }
         .apply { if (n.due) put("due", true) }
         .apply { n.pos?.let { put("pos", it) } }
+        .apply { n.reading?.let { put("rd", it) } }
         .apply {
             if (n.attachments.isNotEmpty()) put("att", JSONArray().apply {
                 n.attachments.forEach { put(JSONObject().put("f", it.file).put("n", it.name).put("m", it.mime)) }
@@ -297,6 +300,7 @@ object Notes : NoteStore {
         doneAt = if (o.has("da")) o.getLong("da") else null,
         due = o.optBoolean("due"),
         pos = if (o.has("pos")) o.getDouble("pos") else null,
+        reading = if (o.has("rd")) o.getDouble("rd") else null,
         attachments = o.optJSONArray("att")?.let { a ->
             List(a.length()) { i -> a.getJSONObject(i).let { Attachment(it.getString("f"), it.optString("n"), it.optString("m")) } }
         } ?: emptyList(),
