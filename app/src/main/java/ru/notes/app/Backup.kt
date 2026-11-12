@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit
  */
 object Backup {
     /** ID приложения из oauth.yandex.ru (не секрет, его видно в ссылке входа). */
-    const val CLIENT_ID = ""
+    const val CLIENT_ID = "4f38f89d1ef9446782427fd92e3d1959"
     const val REDIRECT = "notesapp://yandex"
     private const val API = "https://cloud-api.yandex.net/v1/disk/resources"
     private val FILES = listOf("notes.json", Vault.FILE)
