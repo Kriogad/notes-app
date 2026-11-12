@@ -53,6 +53,12 @@ data class Note(
 ) {
     val seriesId get() = if (series == 0L) id else series
 
+    /** Есть повтор у заметки или у какого-нибудь пункта. */
+    val isRecurring get() = repeat != Repeat.NONE || items.any { it.repeat != Repeat.NONE && it.remindAt != null }
+
+    /** Ближайшее напоминание (заметки или пункта). */
+    val nextRemind get() = (listOfNotNull(remindAt) + items.filter { !it.checked }.mapNotNull { it.remindAt }).minOrNull()
+
     val isBlank: Boolean
         get() = title.isBlank() && text.isBlank() && items.all { it.text.isBlank() } && attachments.isEmpty()
 

@@ -46,6 +46,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.PrimaryTabRow
+import androidx.compose.material3.Tab
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -219,32 +223,66 @@ private fun ListScreen(
             }
         },
     ) { pad ->
-        if (shown.isEmpty()) {
-            val empty = when {
-                searching -> if (query.isBlank()) "Введите слово для поиска" else "Ничего не найдено"
-                archive -> "В архиве пусто.\nСюда попадают выполненные заметки."
-                else -> "Заметок пока нет.\nНажмите +, чтобы добавить."
-            }
-            Box(Modifier.fillMaxSize().padding(pad), contentAlignment = Alignment.Center) {
-                Text(empty, color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center)
-            }
+        val empty = when {
+            searching -> if (query.isBlank()) "Введите слово для поиска" else "Ничего не найдено"
+            archive -> "В архиве пусто.\nСюда попадают выполненные заметки."
+            else -> "Заметок пока нет.\nНажмите +, чтобы добавить."
+        }
+        if (searching || archive) {
+            NoteList(shown, empty, Modifier.padding(pad), onOpen)
         } else {
-            BoxWithConstraints(Modifier.fillMaxSize().padding(pad).imePadding()) {
-                // Делим высоту экрана между заметками: пока места хватает, список виден целиком
-                val perNote = (maxHeight - 88.dp) / shown.size - 64.dp
-                val maxItems = maxOf(4, (perNote / 24.dp).toInt())
-                LazyColumn(
-                    Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 88.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(shown, key = { it.id }) { note ->
-                        NoteCard(note, Notes, Modifier.animateItem(), maxItems) { onOpen(note.id) }
+            // Вкладки: обычные заметки и повторяющиеся (листаются свайпом)
+            val active = notes.filter { !it.done }
+            val tabs = listOf(
+                "Текучка" to active.filter { !it.isRecurring },
+                "Повторяющиеся" to active.filter { it.isRecurring }.sortedBy { it.nextRemind ?: Long.MAX_VALUE },
+            )
+            val pager = rememberPagerState { tabs.size }
+            val tabScope = rememberCoroutineScope()
+            Column(Modifier.padding(pad)) {
+                PrimaryTabRow(selectedTabIndex = pager.currentPage, containerColor = Color.Transparent) {
+                    tabs.forEachIndexed { i, (title, list) ->
+                        Tab(
+                            selected = pager.currentPage == i,
+                            onClick = { tabScope.launch { pager.animateScrollToPage(i) } },
+                            text = { Text("$title (${list.size})") },
+                        )
                     }
+                }
+                HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
+                    NoteList(
+                        tabs[page].second,
+                        if (page == 0) empty else "Здесь будут заметки с повтором: «каждый месяц», «каждый день»…\nПовтор ставится в напоминании 🔔.",
+                        Modifier, onOpen,
+                    )
                 }
             }
         }
     }
+    }
+}
+
+@Composable
+private fun NoteList(list: List<Note>, empty: String, modifier: Modifier, onOpen: (Long) -> Unit) {
+    if (list.isEmpty()) {
+        Box(modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            Text(empty, color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center)
+        }
+        return
+    }
+    BoxWithConstraints(modifier.fillMaxSize().imePadding()) {
+        // Делим высоту экрана между заметками: пока места хватает, список виден целиком
+        val perNote = (maxHeight - 88.dp) / list.size - 64.dp
+        val maxItems = maxOf(4, (perNote / 24.dp).toInt())
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 88.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(list, key = { it.id }) { note ->
+                NoteCard(note, Notes, Modifier.animateItem(), maxItems) { onOpen(note.id) }
+            }
+        }
     }
 }
 
