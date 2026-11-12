@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
                     onVoice = ::listen,
                     onReminderSet = ::askNotificationPermission,
                 )
+                UpdateCheck()
             }
         }
     }

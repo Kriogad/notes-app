@@ -29,5 +29,6 @@ jobs:
         with:
           tag_name: v1.${{ github.run_number }}
           name: Заметки 1.${{ github.run_number }}
+          body: ${{ github.event.head_commit.message }}
           files: Notes.apk
           make_latest: true
