@@ -15,6 +15,11 @@ import java.io.File
 
 data class CheckItem(val text: String, val checked: Boolean = false)
 
+/** Вложение: файл лежит в filesDir/attachments/[file], [name] — исходное имя для показа. */
+data class Attachment(val file: String, val name: String, val mime: String) {
+    val isImage get() = mime.startsWith("image/")
+}
+
 data class Note(
     val id: Long,
     val title: String = "",
@@ -23,9 +28,10 @@ data class Note(
     val done: Boolean = false,
     val remindAt: Long? = null,
     val updated: Long = System.currentTimeMillis(),
+    val attachments: List<Attachment> = emptyList(),
 ) {
     val isBlank: Boolean
-        get() = title.isBlank() && text.isBlank() && items.all { it.text.isBlank() }
+        get() = title.isBlank() && text.isBlank() && items.all { it.text.isBlank() } && attachments.isEmpty()
 
     val displayTitle: String
         get() = title.ifBlank {
@@ -84,6 +90,7 @@ object Notes : NoteStore {
 
     @Synchronized
     override fun delete(id: Long) {
+        get(id)?.attachments?.forEach { Attachments.delete(app, it) }
         commit(state.value.filter { it.id != id })
         Reminders.cancel(app, id)
     }
@@ -166,6 +173,11 @@ object Notes : NoteStore {
             n.items.forEach { put(JSONObject().put("t", it.text).put("c", it.checked)) }
         })
         .apply { n.remindAt?.let { put("remind", it) } }
+        .apply {
+            if (n.attachments.isNotEmpty()) put("att", JSONArray().apply {
+                n.attachments.forEach { put(JSONObject().put("f", it.file).put("n", it.name).put("m", it.mime)) }
+            })
+        }
 
     fun fromJson(o: JSONObject) = Note(
         id = o.getLong("id"),
@@ -177,5 +189,8 @@ object Notes : NoteStore {
         done = o.optBoolean("done"),
         remindAt = if (o.has("remind")) o.getLong("remind") else null,
         updated = o.optLong("updated"),
+        attachments = o.optJSONArray("att")?.let { a ->
+            List(a.length()) { i -> a.getJSONObject(i).let { Attachment(it.getString("f"), it.optString("n"), it.optString("m")) } }
+        } ?: emptyList(),
     )
 }

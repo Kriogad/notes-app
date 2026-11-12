@@ -16,6 +16,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.size
+import android.widget.Toast
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -32,6 +38,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -127,6 +135,8 @@ interface Host {
     fun askNotificationPermission()
     fun bioAvailable(): Boolean
     fun biometric(cipher: javax.crypto.Cipher, title: String, onOk: (javax.crypto.Cipher) -> Unit)
+    fun pickPhotos(onPicked: (List<android.net.Uri>) -> Unit)
+    fun pickFiles(onPicked: (List<android.net.Uri>) -> Unit)
 }
 
 // ---------------- Список, архив, поиск ----------------
@@ -246,6 +256,14 @@ fun NoteCard(note: Note, store: NoteStore, modifier: Modifier, maxItems: Int = 4
                 if (note.items.size > maxItems) {
                     Text("… ещё ${note.items.size - maxItems}", style = MaterialTheme.typography.bodySmall)
                 }
+                if (note.attachments.isNotEmpty()) {
+                    Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        note.attachments.filter { it.isImage }.take(3).forEach { Thumb(it, 56.dp) }
+                        Text("📎 ${note.attachments.size}", style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(start = 4.dp))
+                    }
+                }
                 note.remindAt?.let {
                     val past = it < System.currentTimeMillis()
                     Text(
@@ -276,6 +294,16 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
     var pickDate by remember { mutableStateOf(false) }
     var pickedDay by remember { mutableStateOf<Long?>(null) }
     var askDelete by remember { mutableStateOf(false) }
+    var attachMenu by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val onPicked: (List<android.net.Uri>) -> Unit = { uris ->
+        scope.launch {
+            val new = uris.mapNotNull { Attachments.import(ctx, it) }
+            if (new.size < uris.size) Toast.makeText(ctx, "Не все файлы удалось прикрепить", Toast.LENGTH_LONG).show()
+            note = note.copy(attachments = note.attachments + new)
+        }
+    }
 
     // Автосохранение: через полсекунды после правки и при выходе
     fun persist() {
@@ -300,6 +328,13 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                     IconButton(onClick = {
                         host.listen { t -> note = note.copy(text = if (note.text.isBlank()) t else note.text.trimEnd() + "\n" + t) }
                     }) { Icon(painterResource(R.drawable.ic_mic), "Надиктовать текст") }
+                    if (!secret) Box {
+                        IconButton(onClick = { attachMenu = true }) { Icon(painterResource(R.drawable.ic_attach), "Прикрепить") }
+                        DropdownMenu(expanded = attachMenu, onDismissRequest = { attachMenu = false }) {
+                            DropdownMenuItem(text = { Text("Фото из галереи") }, onClick = { attachMenu = false; host.pickPhotos(onPicked) })
+                            DropdownMenuItem(text = { Text("Файл") }, onClick = { attachMenu = false; host.pickFiles(onPicked) })
+                        }
+                    }
                     // Напоминание показало бы заголовок секретной заметки в уведомлении — там его нет
                     if (!secret) IconButton(onClick = { pickDate = true }) { Icon(Icons.Filled.Notifications, "Напоминание") }
                     IconButton(onClick = { askDelete = true }) { Icon(Icons.Filled.Delete, "Удалить") }
@@ -330,6 +365,34 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
             }
 
             PlainField(note.text, { note = note.copy(text = it) }, "Текст заметки", MaterialTheme.typography.bodyLarge)
+
+            fun remove(a: Attachment) {
+                Attachments.delete(ctx, a)
+                note = note.copy(attachments = note.attachments - a)
+            }
+            val images = note.attachments.filter { it.isImage }
+            if (images.isNotEmpty()) Row(
+                Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                images.forEach { a ->
+                    Box {
+                        Thumb(a, 110.dp) { Attachments.open(ctx, a) }
+                        IconButton(onClick = { remove(a) }, modifier = Modifier.align(Alignment.TopEnd).size(32.dp)) {
+                            Icon(Icons.Filled.Close, "Убрать фото", tint = Color.White)
+                        }
+                    }
+                }
+            }
+            note.attachments.filter { !it.isImage }.forEach { a ->
+                Card(onClick = { Attachments.open(ctx, a) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 12.dp)) {
+                        Icon(painterResource(R.drawable.ic_attach), null)
+                        Text(a.name, Modifier.weight(1f).padding(start = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        IconButton(onClick = { remove(a) }) { Icon(Icons.Filled.Close, "Убрать файл") }
+                    }
+                }
+            }
 
             note.items.forEachIndexed { i, item ->
                 fun update(new: CheckItem?) {

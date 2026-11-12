@@ -3,6 +3,8 @@ package ru.notes.app
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.net.Uri
+import androidx.activity.result.PickVisualMediaRequest
 import android.hardware.biometrics.BiometricManager
 import android.hardware.biometrics.BiometricPrompt
 import android.os.CancellationSignal
@@ -38,6 +40,20 @@ class MainActivity : ComponentActivity(), Host {
         r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
             ?.let { onVoiceText?.invoke(it) }
     }
+    private var onPicked: ((List<Uri>) -> Unit)? = null
+    private val photoPicker = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { onPicked?.invoke(it) }
+    private val filePicker = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { onPicked?.invoke(it) }
+
+    override fun pickPhotos(onPicked: (List<Uri>) -> Unit) {
+        this.onPicked = onPicked
+        photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
+
+    override fun pickFiles(onPicked: (List<Uri>) -> Unit) {
+        this.onPicked = onPicked
+        filePicker.launch(arrayOf("*/*"))
+    }
+
     private val notifPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (!ok) Toast.makeText(this, "Без разрешения напоминания не будут показаны", Toast.LENGTH_LONG).show()
     }

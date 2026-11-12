@@ -99,8 +99,39 @@ object Backup {
             put(token, "app:/${f.name}", bytes)
             put(token, "app:/history/$day-${f.name}", bytes)
         }
+        uploadAttachments(ctx, token)
         setStatus(ctx, "Последняя копия: " + java.time.LocalDateTime.now().format(
             java.time.format.DateTimeFormatter.ofPattern("d MMM, HH:mm")))
+    }
+
+    /** Фото и файлы: отправляем только новые, список отправленных — в настройках. */
+    private fun uploadAttachments(ctx: Context, token: String) {
+        val files = Attachments.dir(ctx).listFiles().orEmpty()
+        val sent = prefs(ctx).getStringSet("sent", emptySet())!!.toMutableSet()
+        val todo = files.filter { it.name !in sent }
+        if (todo.isEmpty()) return
+        request("PUT", "$API?path=" + enc("app:/attachments"), token, okCodes = setOf(201, 409))
+        for (f in todo) {
+            putFile(token, "app:/attachments/${f.name}", f)
+            sent += f.name
+            prefs(ctx).edit().putStringSet("sent", sent.toSet()).apply()
+        }
+    }
+
+    private fun restoreAttachments(ctx: Context, token: String) {
+        val sent = prefs(ctx).getStringSet("sent", emptySet())!!.toMutableSet()
+        Notes.notes.value.flatMap { it.attachments }.forEach { a ->
+            val f = Attachments.file(ctx, a)
+            if (f.exists()) return@forEach
+            runCatching {
+                val href = link(token, "$API/download?path=" + enc("app:/attachments/${a.file}"))
+                (URL(href).openConnection() as HttpURLConnection).inputStream.use { input ->
+                    f.outputStream().use { input.copyTo(it) }
+                }
+                sent += a.file
+            }
+        }
+        prefs(ctx).edit().putStringSet("sent", sent.toSet()).apply()
     }
 
     /** Восстановить из копии. false — копии на Диске нет. */
@@ -121,6 +152,7 @@ object Backup {
         }
         if (found) {
             withContext(Dispatchers.Main) { Notes.reload(); Vault.reload() }
+            restoreAttachments(ctx, token)
             setStatus(ctx, "Восстановлено из копии")
         }
         found
@@ -133,6 +165,17 @@ object Backup {
         c.doOutput = true
         c.setFixedLengthStreamingMode(bytes.size)
         c.outputStream.use { it.write(bytes) }
+        if (c.responseCode !in 200..299) throw HttpError(c.responseCode)
+    }
+
+    /** Большие файлы отправляем потоком, не загружая целиком в память. */
+    private fun putFile(token: String, path: String, f: File) {
+        val href = link(token, "$API/upload?overwrite=true&path=" + enc(path))
+        val c = URL(href).openConnection() as HttpURLConnection
+        c.requestMethod = "PUT"
+        c.doOutput = true
+        c.setFixedLengthStreamingMode(f.length())
+        c.outputStream.use { out -> f.inputStream().use { it.copyTo(out) } }
         if (c.responseCode !in 200..299) throw HttpError(c.responseCode)
     }
 
