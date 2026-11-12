@@ -174,6 +174,16 @@ private fun ListScreen(
     var searching by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     val archived = notes.count { it.done }
+    var askClear by remember { mutableStateOf(false) }
+    if (askClear) AlertDialog(
+        onDismissRequest = { askClear = false },
+        title = { Text("Очистить архив?") },
+        text = { Text("Удалятся все выполненные заметки ($archived) вместе с фото, включая историю повторяющихся.") },
+        confirmButton = {
+            TextButton(onClick = { notes.filter { it.done }.forEach { Notes.delete(it.id) }; askClear = false }) { Text("Удалить всё") }
+        },
+        dismissButton = { TextButton(onClick = { askClear = false }) { Text("Отмена") } },
+    )
 
     // Поиск идёт по всем заметкам, включая архив
     val shown = when {
@@ -215,6 +225,7 @@ private fun ListScreen(
                     }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
                 },
                 actions = {
+                    if (archive && !searching && archived > 0) TextButton(onClick = { askClear = true }) { Text("Очистить") }
                     if (!searching) IconButton(onClick = { searching = true }) { Icon(Icons.Filled.Search, "Поиск") }
                     if (!searching && !archive) {
                         TextButton(onClick = { archive = true }) { Text("Архив ($archived)") }
@@ -272,7 +283,17 @@ private fun ListScreen(
 @Composable
 private fun NoteList(list: List<Note>, empty: String, modifier: Modifier, host: Host, onOpen: (Long) -> Unit) {
     var adding by remember { mutableStateOf<Long?>(null) }
+    var deleting by remember { mutableStateOf<Note?>(null) }
     adding?.let { QuickAdd(it, host) { adding = null } }
+    deleting?.let { n ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Удалить «${n.displayTitle}»?") },
+            text = { Text("Заметка и её фото удалятся совсем.") },
+            confirmButton = { TextButton(onClick = { Notes.delete(n.id); deleting = null }) { Text("Удалить") } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Отмена") } },
+        )
+    }
     if (list.isEmpty()) {
         Box(modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
             Text(empty, color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center)
@@ -289,7 +310,8 @@ private fun NoteList(list: List<Note>, empty: String, modifier: Modifier, host: 
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(list, key = { it.id }) { note ->
-                NoteCard(note, Notes, Modifier.animateItem(), maxItems, onAdd = { adding = note.id }) { onOpen(note.id) }
+                NoteCard(note, Notes, Modifier.animateItem(), maxItems, onAdd = { adding = note.id },
+                    onDelete = { deleting = note }) { onOpen(note.id) }
             }
         }
     }
@@ -302,6 +324,7 @@ fun NoteCard(
     modifier: Modifier,
     maxItems: Int = 4,
     onAdd: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     // Галочка у пункта прямо на карточке, без захода в заметку
@@ -359,6 +382,11 @@ fun NoteCard(
             if (onAdd != null && !note.done) {
                 IconButton(onClick = onAdd, modifier = Modifier.padding(top = 4.dp)) {
                     Icon(Icons.Filled.Add, "Добавить пункт", tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+            if (onDelete != null && note.done) {
+                IconButton(onClick = onDelete, modifier = Modifier.padding(top = 4.dp)) {
+                    Icon(Icons.Filled.Delete, "Удалить", tint = MaterialTheme.colorScheme.outline)
                 }
             }
         }
