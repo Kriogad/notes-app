@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -446,14 +447,16 @@ fun NoteCard(
 /** Быстрое добавление пунктов с главного экрана: вписал → Enter → следующий; или голосом. */
 @Composable
 private fun QuickAdd(noteId: Long, host: Host, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
     val note = Notes.notes.collectAsState().value.find { it.id == noteId }
     if (note == null) { LaunchedEffect(Unit) { onDismiss() }; return }
     var text by remember { mutableStateOf("") }
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     fun add(vararg t: String) {
-        val new = t.map { it.trim() }.filter { it.isNotEmpty() }.map { CheckItem(it) }
+        val new = t.map { it.trim() }.filter { it.isNotEmpty() }.map { DateParser.item(it) }
         if (new.isEmpty()) return
+        DateParser.toast(ctx, new)
         val n = Notes.get(noteId) ?: return
         Notes.upsert(n.copy(items = n.items.filter { it.text.isNotBlank() } + new))
     }
@@ -544,7 +547,11 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                 },
                 actions = {
                     IconButton(onClick = {
-                        host.listen { t -> note = note.copy(text = if (note.text.isBlank()) t else note.text.trimEnd() + "\n" + t) }
+                        host.listen { t ->
+                            val before = note.remindAt
+                            note = DateParser.apply(note.copy(text = if (note.text.isBlank()) t else note.text.trimEnd() + "\n" + t), t)
+                            if (before == null && !secret) DateParser.toast(ctx, emptyList(), note)
+                        }
                     }) { Icon(painterResource(R.drawable.ic_mic), "Надиктовать текст") }
                     Box {
                         IconButton(onClick = { attachMenu = true }) { Icon(painterResource(R.drawable.ic_attach), "Прикрепить") }
@@ -555,6 +562,7 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                     }
                     // Напоминание показало бы заголовок секретной заметки в уведомлении — там его нет
                     if (!secret) IconButton(onClick = { target = 0L; pickDate = true }) { Icon(Icons.Filled.Notifications, "Напоминание") }
+                    IconButton(onClick = { Share.send(ctx, note, secret) }) { Icon(Icons.Filled.Share, "Отправить") }
                     IconButton(onClick = { askDelete = true }) { Icon(Icons.Filled.Delete, "Удалить") }
                 },
             )
@@ -654,8 +662,9 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                 // «молоко, хлеб и яйца» → три пункта
                 TextButton(onClick = {
                     host.listen { t ->
-                        val new = splitItems(t).map { CheckItem(it) }
+                        val new = splitItems(t).map { if (secret) CheckItem(it) else DateParser.item(it) }
                         note = note.copy(items = note.items.filter { it.text.isNotBlank() } + new)
+                        DateParser.toast(ctx, new)
                     }
                 }) {
                     Icon(painterResource(R.drawable.ic_mic), null)

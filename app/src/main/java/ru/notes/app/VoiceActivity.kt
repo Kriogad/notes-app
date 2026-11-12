@@ -40,12 +40,15 @@ class VoiceActivity : ComponentActivity() {
     private fun save(text: String) {
         val note = Notes.get(intent.getLongExtra(EXTRA_VOICE_TO, -1))
         if (note != null) {
-            val new = splitItems(text).map { CheckItem(it) }
+            val new = splitItems(text).map { DateParser.item(it) }
             Notes.upsert(note.copy(items = note.items.filter { it.text.isNotBlank() } + new))
             Toast.makeText(this, "Добавлено: " + new.joinToString(", ") { it.text }, Toast.LENGTH_SHORT).show()
+            DateParser.toast(this, new)
         } else {
-            Notes.upsert(Note(System.currentTimeMillis(), text = text.replaceFirstChar { it.uppercase() }))
+            val n = DateParser.apply(Note(System.currentTimeMillis(), text = text.replaceFirstChar { it.uppercase() }), text)
+            Notes.upsert(n)
             Toast.makeText(this, "Заметка сохранена", Toast.LENGTH_SHORT).show()
+            DateParser.toast(this, emptyList(), n)
         }
     }
 }
