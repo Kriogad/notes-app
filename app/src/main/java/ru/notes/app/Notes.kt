@@ -19,6 +19,8 @@ data class CheckItem(
     val id: Long = kotlin.random.Random.nextLong(1, Long.MAX_VALUE),
     val remindAt: Long? = null,
     val repeat: Repeat = Repeat.NONE,
+    /** Своя мелодия напоминания; null — как в настройках. */
+    val sound: String? = null,
 )
 
 /** Вложение: файл лежит в filesDir/attachments/[file], [name] — исходное имя для показа. */
@@ -38,6 +40,7 @@ data class Note(
     val updated: Long = System.currentTimeMillis(),
     val attachments: List<Attachment> = emptyList(),
     val repeat: Repeat = Repeat.NONE,
+    val sound: String? = null,
     /** Серия повторяющейся заметки: у всех копий (и в архиве) одно значение. */
     val series: Long = 0,
     /** Когда выполнено (для истории). */
@@ -224,12 +227,14 @@ object Notes : NoteStore {
                 put(JSONObject().put("t", it.text).put("c", it.checked).put("i", it.id).apply {
                     it.remindAt?.let { r -> put("r", r) }
                     if (it.repeat != Repeat.NONE) put("rep", it.repeat.key)
+                    it.sound?.let { s -> put("snd", s) }
                 })
             }
         })
         .apply { n.remindAt?.let { put("remind", it) } }
         .apply { if (n.repeat != Repeat.NONE) put("rep", n.repeat.key) }
         .apply { if (n.series != 0L) put("s", n.series) }
+        .apply { n.sound?.let { put("snd", it) } }
         .apply { n.doneAt?.let { put("da", it) } }
         .apply { if (n.due) put("due", true) }
         .apply {
@@ -246,7 +251,8 @@ object Notes : NoteStore {
             List(a.length()) { i ->
                 a.getJSONObject(i).let {
                     val item = CheckItem(it.optString("t"), it.optBoolean("c"),
-                        remindAt = if (it.has("r")) it.getLong("r") else null, repeat = Repeat.of(it.optString("rep")))
+                        remindAt = if (it.has("r")) it.getLong("r") else null, repeat = Repeat.of(it.optString("rep")),
+                        sound = if (it.has("snd")) it.getString("snd") else null)
                     if (it.has("i")) item.copy(id = it.getLong("i")) else item
                 }
             }
@@ -256,6 +262,7 @@ object Notes : NoteStore {
         updated = o.optLong("updated"),
         repeat = Repeat.of(o.optString("rep")),
         series = o.optLong("s"),
+        sound = if (o.has("snd")) o.getString("snd") else null,
         doneAt = if (o.has("da")) o.getLong("da") else null,
         due = o.optBoolean("due"),
         attachments = o.optJSONArray("att")?.let { a ->

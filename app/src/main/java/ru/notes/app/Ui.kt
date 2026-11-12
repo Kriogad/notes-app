@@ -317,6 +317,7 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
     val targetItem = note.items.find { it.id == target }
     val targetAt = if (target == 0L) note.remindAt else targetItem?.remindAt
     val targetRepeat = if (target == 0L) note.repeat else targetItem?.repeat ?: Repeat.NONE
+    val targetSound = if (target == 0L) note.sound else targetItem?.sound
     var pickedDay by remember { mutableStateOf<Long?>(null) }
     var pickedTime by remember { mutableStateOf<Long?>(null) }
     var askDelete by remember { mutableStateOf(false) }
@@ -505,12 +506,14 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
     pickedTime?.let { at ->
         RepeatDialog(
             initial = targetRepeat,
+            initialSound = targetSound,
+            host = host,
             onDismiss = { pickedTime = null },
-            onPick = { rep ->
+            onPick = { rep, snd ->
                 pickedTime = null
-                note = if (target == 0L) note.copy(remindAt = at, repeat = rep, done = false)
+                note = if (target == 0L) note.copy(remindAt = at, repeat = rep, sound = snd, done = false)
                 else note.copy(items = note.items.map {
-                    if (it.id == target) it.copy(remindAt = at, repeat = rep, checked = false) else it
+                    if (it.id == target) it.copy(remindAt = at, repeat = rep, sound = snd, checked = false) else it
                 })
                 host.askNotificationPermission()
             },
@@ -589,13 +592,22 @@ private fun History(note: Note, onOpen: (Long) -> Unit) {
 }
 
 @Composable
-private fun RepeatDialog(initial: Repeat, onDismiss: () -> Unit, onPick: (Repeat) -> Unit) {
+private fun RepeatDialog(
+    initial: Repeat,
+    initialSound: String?,
+    host: Host,
+    onDismiss: () -> Unit,
+    onPick: (Repeat, String?) -> Unit,
+) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     var sel by remember { mutableStateOf(initial) }
+    var snd by remember { mutableStateOf(initialSound) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Повторять") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Repeat.entries.forEach { r ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -605,9 +617,24 @@ private fun RepeatDialog(initial: Repeat, onDismiss: () -> Unit, onPick: (Repeat
                         Text(r.label)
                     }
                 }
+                Text("Мелодия: " + Reminders.titleOf(ctx, snd), style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))
+                TextButton(onClick = {
+                    host.pickSound(snd?.let(android.net.Uri::parse) ?: Reminders.soundUri(ctx)) { u -> if (u != null) snd = u.toString() }
+                }) { Text("Из телефона") }
+                TextButton(onClick = {
+                    host.pickAudio { src ->
+                        scope.launch {
+                            val u = Reminders.importSound(ctx, src)
+                            if (u == null) Toast.makeText(ctx, "Не удалось взять этот файл", Toast.LENGTH_LONG).show()
+                            else snd = u.toString()
+                        }
+                    }
+                }) { Text("Свой MP3") }
+                if (snd != null) TextButton(onClick = { snd = null }) { Text("Как в настройках") }
             }
         },
-        confirmButton = { TextButton(onClick = { onPick(sel) }) { Text("Готово") } },
+        confirmButton = { TextButton(onClick = { onPick(sel, snd) }) { Text("Готово") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
     )
 }

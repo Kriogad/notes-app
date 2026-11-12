@@ -127,13 +127,23 @@ object Reminders {
 
     private fun channelId(ctx: Context) = "remind_" + prefs(ctx).getInt("chan", 1)
 
-    fun createChannel(ctx: Context) {
+    fun titleOf(ctx: Context, sound: String?): String = if (sound == null) "Как в настройках" else
+        runCatching { RingtoneManager.getRingtone(ctx, Uri.parse(sound))?.getTitle(ctx) }.getOrNull() ?: "Своя мелодия"
+
+    /** У каждой своей мелодии — свой канал (звук канала Android менять не даёт). */
+    private fun channelFor(ctx: Context, sound: String?): String {
+        if (sound == null) return channelId(ctx)
+        val id = "remind_snd_" + sound.hashCode().toUInt()
         val nm = ctx.getSystemService(NotificationManager::class.java)
-        nm.deleteNotificationChannel("reminders") // канал старых версий
-        val ch = NotificationChannel(channelId(ctx), "Напоминания", NotificationManager.IMPORTANCE_HIGH).apply {
+        if (nm.getNotificationChannel(id) == null) nm.createNotificationChannel(channel(id, "Напоминания: " + titleOf(ctx, sound), Uri.parse(sound)))
+        return id
+    }
+
+    private fun channel(id: String, name: String, sound: Uri?) =
+        NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH).apply {
             // Громкость будильника, а не тихих уведомлений
             setSound(
-                soundUri(ctx),
+                sound,
                 AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build(),
             )
@@ -141,20 +151,27 @@ object Reminders {
             vibrationPattern = longArrayOf(0, 600, 300, 600, 300, 600)
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         }
-        nm.createNotificationChannel(ch)
+
+    fun createChannel(ctx: Context) {
+        val nm = ctx.getSystemService(NotificationManager::class.java)
+        nm.deleteNotificationChannel("reminders") // канал старых версий
+        nm.createNotificationChannel(channel(channelId(ctx), "Напоминания", soundUri(ctx)))
     }
 
     // ---------- будильники ----------
     // Напоминание есть у заметки (item = 0) и у любого пункта (item = id пункта).
     // На каждое — два будильника: «по графику» (REMIND) и «напомнить снова / отложено» (NAG).
 
-    private class Rem(val item: Long, val at: Long?, val repeat: Repeat, val done: Boolean, val title: String, val text: String)
+    private class Rem(
+        val item: Long, val at: Long?, val repeat: Repeat, val done: Boolean,
+        val title: String, val text: String, val sound: String?,
+    )
 
     private fun rems(n: Note): List<Rem> {
         val main = Rem(0, n.remindAt, n.repeat, n.done, n.displayTitle,
-            n.text.ifBlank { n.items.filter { !it.checked }.joinToString(", ") { it.text } })
+            n.text.ifBlank { n.items.filter { !it.checked }.joinToString(", ") { it.text } }, n.sound)
         return listOf(main) + n.items.filter { it.remindAt != null }.map {
-            Rem(it.id, it.remindAt, it.repeat, n.done || it.checked, it.text.ifBlank { n.displayTitle }, n.displayTitle)
+            Rem(it.id, it.remindAt, it.repeat, n.done || it.checked, it.text.ifBlank { n.displayTitle }, n.displayTitle, it.sound)
         }
     }
 
@@ -240,7 +257,8 @@ object Reminders {
     private fun canNotify(ctx: Context) = Build.VERSION.SDK_INT < 33 ||
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
-    private fun builder(ctx: Context, title: String, text: String) = NotificationCompat.Builder(ctx, channelId(ctx))
+    private fun builder(ctx: Context, title: String, text: String, sound: String? = null) =
+        NotificationCompat.Builder(ctx, channelFor(ctx, sound))
         .setSmallIcon(R.drawable.ic_notification)
         .setContentTitle(title)
         .setContentText(text)
@@ -267,7 +285,7 @@ object Reminders {
         )
         post(
             ctx, k.hashCode(),
-            builder(ctx, r.title, r.text)
+            builder(ctx, r.title, r.text, r.sound)
                 .setContentIntent(open)
                 .addAction(0, "Выполнено", broadcast(ctx, ACTION_DONE, note.id, r.item))
                 .addAction(0, "+10 мин", broadcast(ctx, ACTION_SNOOZE_10, note.id, r.item))
