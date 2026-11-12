@@ -30,6 +30,7 @@ import java.time.ZoneId
 const val EXTRA_OPEN = "open_id"
 const val EXTRA_NEW = "new_note"
 const val EXTRA_ACK = "ack"
+const val EXTRA_ITEM = "item"
 
 enum class Repeat(val key: String, val label: String) {
     NONE("", "Не повторять"),
@@ -144,17 +145,39 @@ object Reminders {
     }
 
     // ---------- будильники ----------
+    // Напоминание есть у заметки (item = 0) и у любого пункта (item = id пункта).
+    // На каждое — два будильника: «по графику» (REMIND) и «напомнить снова / отложено» (NAG).
 
-    private fun broadcast(ctx: Context, action: String, id: Long): PendingIntent =
+    private class Rem(val item: Long, val at: Long?, val repeat: Repeat, val done: Boolean, val title: String, val text: String)
+
+    private fun rems(n: Note): List<Rem> {
+        val main = Rem(0, n.remindAt, n.repeat, n.done, n.displayTitle,
+            n.text.ifBlank { n.items.filter { !it.checked }.joinToString(", ") { it.text } })
+        return listOf(main) + n.items.filter { it.remindAt != null }.map {
+            Rem(it.id, it.remindAt, it.repeat, n.done || it.checked, it.text.ifBlank { n.displayTitle }, n.displayTitle)
+        }
+    }
+
+    private fun Note.withRemind(item: Long, at: Long?) =
+        if (item == 0L) copy(remindAt = at)
+        else copy(items = items.map { if (it.id == item) it.copy(remindAt = at) else it })
+
+    private fun key(note: Long, item: Long) = "$note/$item"
+
+    private fun intent(ctx: Context, action: String, note: Long, item: Long) =
+        Intent(ctx, ReminderReceiver::class.java).setAction(action)
+            .setData(Uri.parse("notes://rem/${key(note, item)}")) // своя «ссылка» у каждого напоминания
+            .putExtra(EXTRA_ID, note).putExtra(EXTRA_ITEM, item)
+
+    private fun broadcast(ctx: Context, action: String, note: Long, item: Long): PendingIntent =
         PendingIntent.getBroadcast(
-            ctx, id.hashCode(),
-            Intent(ctx, ReminderReceiver::class.java).setAction(action).putExtra(EXTRA_ID, id),
+            ctx, key(note, item).hashCode(), intent(ctx, action, note, item),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-    private fun alarm(ctx: Context, action: String, id: Long, at: Long) {
+    private fun alarm(ctx: Context, action: String, note: Long, item: Long, at: Long) {
         val am = ctx.getSystemService(AlarmManager::class.java)
-        val pi = broadcast(ctx, action, id)
+        val pi = broadcast(ctx, action, note, item)
         if (Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()) {
             am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
         } else {
@@ -162,39 +185,53 @@ object Reminders {
         }
     }
 
-    /** Ставит или снимает будильник по состоянию заметки. */
+    /** Ставит или снимает все будильники заметки и её пунктов. */
     fun sync(ctx: Context, note: Note) {
-        val at = note.remindAt
-        if (at == null || note.done) {
-            cancel(ctx, note.id)
-            return
+        val now = System.currentTimeMillis()
+        val all = rems(note)
+        // Повторяющиеся, которые пропущены (телефон был выключен), — сразу на следующий раз
+        var moved = note
+        all.forEach { r -> if (r.at != null && r.at <= now && !r.done && r.repeat != Repeat.NONE) moved = moved.withRemind(r.item, r.repeat.next(r.at)) }
+        if (moved != note) { Notes.upsert(moved); return }
+
+        all.forEach { r ->
+            when {
+                r.at == null || r.done -> cancel(ctx, note.id, r.item)
+                r.at > now -> alarm(ctx, ACTION_REMIND, note.id, r.item, r.at)
+                // прошедшее разовое не трогаем: возможно, ещё идут повторы «напомнить снова»
+            }
         }
-        if (at <= System.currentTimeMillis()) {
-            // Повторяющееся пропущено (телефон был выключен) — переносим на следующий раз
-            if (note.repeat != Repeat.NONE) Notes.upsert(note.copy(remindAt = note.repeat.next(at)))
-            return
-        }
-        alarm(ctx, ACTION_REMIND, note.id, at)
+        // Пункты, которые удалили или у которых убрали напоминание
+        val known = prefs(ctx).getStringSet("items_${note.id}", emptySet())!!
+        val now_ = all.filter { it.item != 0L }.map { it.item.toString() }.toSet()
+        (known - now_).forEach { cancel(ctx, note.id, it.toLong()) }
+        prefs(ctx).edit().putStringSet("items_${note.id}", now_).apply()
     }
 
-    fun cancel(ctx: Context, id: Long) {
-        val am = ctx.getSystemService(AlarmManager::class.java)
-        am.cancel(broadcast(ctx, ACTION_REMIND, id))
-        ack(ctx, id)
+    fun cancelAll(ctx: Context, note: Note) {
+        cancel(ctx, note.id, 0)
+        note.items.forEach { cancel(ctx, note.id, it.id) }
+        prefs(ctx).getStringSet("items_${note.id}", emptySet())!!.forEach { cancel(ctx, note.id, it.toLong()) }
+        prefs(ctx).edit().remove("items_${note.id}").apply()
+    }
+
+    fun cancel(ctx: Context, note: Long, item: Long) {
+        ctx.getSystemService(AlarmManager::class.java).cancel(broadcast(ctx, ACTION_REMIND, note, item))
+        ack(ctx, note, item)
     }
 
     /** Напоминание увидели: больше не повторять, убрать уведомление. */
-    fun ack(ctx: Context, id: Long) {
-        ctx.getSystemService(AlarmManager::class.java).cancel(broadcast(ctx, ACTION_NAG, id))
-        setPending(ctx, id, false)
-        NotificationManagerCompat.from(ctx).cancel(id.hashCode())
+    fun ack(ctx: Context, note: Long, item: Long) {
+        ctx.getSystemService(AlarmManager::class.java).cancel(broadcast(ctx, ACTION_NAG, note, item))
+        setPending(ctx, key(note, item), false)
+        NotificationManagerCompat.from(ctx).cancel(key(note, item).hashCode())
     }
 
     private fun pending(ctx: Context) = prefs(ctx).getStringSet("pending", emptySet())!!
 
-    private fun setPending(ctx: Context, id: Long, on: Boolean) {
+    private fun setPending(ctx: Context, k: String, on: Boolean) {
         val s = pending(ctx).toMutableSet()
-        if (on) s += id.toString() else s -= id.toString()
+        if (on) s += k else s -= k
         prefs(ctx).edit().putStringSet("pending", s).apply()
     }
 
@@ -219,25 +256,26 @@ object Reminders {
         NotificationManagerCompat.from(ctx).notify(id, n)
     }
 
-    fun show(ctx: Context, note: Note) {
+    private fun show(ctx: Context, note: Note, r: Rem) {
         if (!canNotify(ctx)) return
+        val k = key(note.id, r.item)
         val open = PendingIntent.getActivity(
-            ctx, note.id.hashCode(),
-            Intent(ctx, MainActivity::class.java).putExtra(EXTRA_OPEN, note.id).putExtra(EXTRA_ACK, true),
+            ctx, k.hashCode(),
+            Intent(ctx, MainActivity::class.java).setData(Uri.parse("notes://open/$k"))
+                .putExtra(EXTRA_OPEN, note.id).putExtra(EXTRA_ITEM, r.item).putExtra(EXTRA_ACK, true),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val text = note.text.ifBlank { note.items.filter { !it.checked }.joinToString(", ") { it.text } }
         post(
-            ctx, note.id.hashCode(),
-            builder(ctx, note.displayTitle, text)
+            ctx, k.hashCode(),
+            builder(ctx, r.title, r.text)
                 .setContentIntent(open)
-                .addAction(0, "Выполнено", broadcast(ctx, ACTION_DONE, note.id))
-                .addAction(0, "+10 мин", broadcast(ctx, ACTION_SNOOZE_10, note.id))
-                .addAction(0, "+1 час", broadcast(ctx, ACTION_SNOOZE_60, note.id)),
+                .addAction(0, "Выполнено", broadcast(ctx, ACTION_DONE, note.id, r.item))
+                .addAction(0, "+10 мин", broadcast(ctx, ACTION_SNOOZE_10, note.id, r.item))
+                .addAction(0, "+1 час", broadcast(ctx, ACTION_SNOOZE_60, note.id, r.item)),
         )
-        setPending(ctx, note.id, true)
+        setPending(ctx, k, true)
         val nag = nagMinutes(ctx)
-        if (nag > 0) alarm(ctx, ACTION_NAG, note.id, System.currentTimeMillis() + nag * 60_000L)
+        if (nag > 0) alarm(ctx, ACTION_NAG, note.id, r.item, System.currentTimeMillis() + nag * 60_000L)
     }
 
     /** Проверка звука из настроек. */
@@ -249,25 +287,28 @@ object Reminders {
 
     fun handle(ctx: Context, intent: Intent) {
         val id = intent.getLongExtra(EXTRA_ID, -1)
+        val item = intent.getLongExtra(EXTRA_ITEM, 0)
         val note = Notes.get(id) ?: return
+        val r = rems(note).find { it.item == item } ?: return
         when (intent.action) {
             ACTION_REMIND -> {
-                if (!note.done) show(ctx, note)
-                if (note.repeat != Repeat.NONE && note.remindAt != null) {
-                    Notes.upsert(note.copy(remindAt = note.repeat.next(note.remindAt)))
+                if (!r.done) show(ctx, note, r)
+                if (r.repeat != Repeat.NONE && r.at != null) Notes.upsert(note.withRemind(item, r.repeat.next(r.at)))
+            }
+            ACTION_NAG -> if (!r.done && key(id, item) in pending(ctx)) show(ctx, note, r)
+            ACTION_DONE -> {
+                ack(ctx, id, item)
+                // Разовое — отмечаем выполненным; повторяющееся — ждём следующего раза
+                if (r.repeat == Repeat.NONE) {
+                    if (item == 0L) Notes.setDone(id, true)
+                    else Notes.upsert(note.copy(items = note.items.map { if (it.id == item) it.copy(checked = true) else it }))
                 }
             }
-            ACTION_NAG -> if (!note.done && id.toString() in pending(ctx)) show(ctx, note)
-            ACTION_DONE -> {
-                ack(ctx, id)
-                // Разовое — в архив; повторяющееся — ждём следующего раза
-                if (note.repeat == Repeat.NONE) Notes.setDone(id, true)
-            }
             ACTION_SNOOZE_10, ACTION_SNOOZE_60 -> {
-                NotificationManagerCompat.from(ctx).cancel(id.hashCode())
-                setPending(ctx, id, true)
+                NotificationManagerCompat.from(ctx).cancel(key(id, item).hashCode())
+                setPending(ctx, key(id, item), true)
                 val min = if (intent.action == ACTION_SNOOZE_10) 10 else 60
-                alarm(ctx, ACTION_NAG, id, System.currentTimeMillis() + min * 60_000L)
+                alarm(ctx, ACTION_NAG, id, item, System.currentTimeMillis() + min * 60_000L)
             }
         }
     }

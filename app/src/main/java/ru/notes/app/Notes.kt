@@ -13,7 +13,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-data class CheckItem(val text: String, val checked: Boolean = false)
+data class CheckItem(
+    val text: String,
+    val checked: Boolean = false,
+    val id: Long = kotlin.random.Random.nextLong(1, Long.MAX_VALUE),
+    val remindAt: Long? = null,
+    val repeat: Repeat = Repeat.NONE,
+)
 
 /** Вложение: файл лежит в filesDir/attachments/[file], [name] — исходное имя для показа. */
 data class Attachment(val file: String, val name: String, val mime: String) {
@@ -81,6 +87,7 @@ object Notes : NoteStore {
         app = context.applicationContext
         file = File(app.filesDir, "notes.json")
         state.value = sort(load())
+        save(state.value)
     }
 
     override fun get(id: Long): Note? = state.value.find { it.id == id }
@@ -93,9 +100,11 @@ object Notes : NoteStore {
 
     @Synchronized
     override fun delete(id: Long) {
-        get(id)?.attachments?.forEach { Attachments.delete(app, it) }
+        get(id)?.let { n ->
+            n.attachments.forEach { Attachments.delete(app, it) }
+            Reminders.cancelAll(app, n)
+        }
         commit(state.value.filter { it.id != id })
-        Reminders.cancel(app, id)
     }
 
     override fun setDone(id: Long, done: Boolean) {
@@ -173,7 +182,12 @@ object Notes : NoteStore {
         .put("done", n.done)
         .put("updated", n.updated)
         .put("items", JSONArray().apply {
-            n.items.forEach { put(JSONObject().put("t", it.text).put("c", it.checked)) }
+            n.items.forEach {
+                put(JSONObject().put("t", it.text).put("c", it.checked).put("i", it.id).apply {
+                    it.remindAt?.let { r -> put("r", r) }
+                    if (it.repeat != Repeat.NONE) put("rep", it.repeat.key)
+                })
+            }
         })
         .apply { n.remindAt?.let { put("remind", it) } }
         .apply { if (n.repeat != Repeat.NONE) put("rep", n.repeat.key) }
@@ -188,7 +202,13 @@ object Notes : NoteStore {
         title = o.optString("title"),
         text = o.optString("text"),
         items = o.optJSONArray("items")?.let { a ->
-            List(a.length()) { i -> a.getJSONObject(i).let { CheckItem(it.optString("t"), it.optBoolean("c")) } }
+            List(a.length()) { i ->
+                a.getJSONObject(i).let {
+                    val item = CheckItem(it.optString("t"), it.optBoolean("c"),
+                        remindAt = if (it.has("r")) it.getLong("r") else null, repeat = Repeat.of(it.optString("rep")))
+                    if (it.has("i")) item.copy(id = it.getLong("i")) else item
+                }
+            }
         } ?: emptyList(),
         done = o.optBoolean("done"),
         remindAt = if (o.has("remind")) o.getLong("remind") else null,

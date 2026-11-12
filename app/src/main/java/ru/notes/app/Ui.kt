@@ -263,7 +263,8 @@ fun NoteCard(note: Note, store: NoteStore, modifier: Modifier, maxItems: Int = 4
                 // Невыполненные пункты первыми — их важнее видеть
                 note.items.sortedBy { it.checked }.take(maxItems).forEach {
                     Text(
-                        (if (it.checked) "☑ " else "☐ ") + it.text,
+                        (if (it.checked) "☑ " else "☐ ") + it.text +
+                            (it.remindAt?.let { r -> "  🔔 " + formatTime(r) } ?: ""),
                         style = MaterialTheme.typography.bodyMedium.strike(it.checked),
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
@@ -307,6 +308,11 @@ private fun TextStyle.strike(on: Boolean) = if (on) copy(textDecoration = TextDe
 private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host, onClose: () -> Unit) {
     var note by remember { mutableStateOf(store.get(id) ?: Note(id)) }
     var pickDate by remember { mutableStateOf(false) }
+    // Для чего ставим напоминание: 0 — вся заметка, иначе id пункта
+    var target by remember { mutableStateOf(0L) }
+    val targetItem = note.items.find { it.id == target }
+    val targetAt = if (target == 0L) note.remindAt else targetItem?.remindAt
+    val targetRepeat = if (target == 0L) note.repeat else targetItem?.repeat ?: Repeat.NONE
     var pickedDay by remember { mutableStateOf<Long?>(null) }
     var pickedTime by remember { mutableStateOf<Long?>(null) }
     var askDelete by remember { mutableStateOf(false) }
@@ -352,7 +358,7 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                         }
                     }
                     // Напоминание показало бы заголовок секретной заметки в уведомлении — там его нет
-                    if (!secret) IconButton(onClick = { pickDate = true }) { Icon(Icons.Filled.Notifications, "Напоминание") }
+                    if (!secret) IconButton(onClick = { target = 0L; pickDate = true }) { Icon(Icons.Filled.Notifications, "Напоминание") }
                     IconButton(onClick = { askDelete = true }) { Icon(Icons.Filled.Delete, "Удалить") }
                 },
             )
@@ -369,7 +375,7 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                 Text(if (secret) "Выполнено" else "Выполнено (в архив)")
                 note.remindAt?.let { at ->
                     AssistChip(
-                        onClick = { pickDate = true },
+                        onClick = { target = 0L; pickDate = true },
                         label = { Text(formatTime(at) + if (note.repeat != Repeat.NONE) " ↻" else "") },
                         leadingIcon = { Icon(Icons.Filled.Notifications, null) },
                         modifier = Modifier.padding(start = 12.dp),
@@ -420,7 +426,22 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                         item.text, { update(item.copy(text = it)) }, "Пункт",
                         MaterialTheme.typography.bodyLarge.strike(item.checked), Modifier.weight(1f),
                     )
+                    if (!secret) IconButton(onClick = { target = item.id; pickDate = true }) {
+                        Icon(Icons.Filled.Notifications, "Напоминание для пункта",
+                            tint = if (item.remindAt != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
+                    }
                     IconButton(onClick = { update(null) }) { Icon(Icons.Filled.Close, "Удалить пункт") }
+                }
+                item.remindAt?.let { at ->
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 52.dp)) {
+                        TextButton(onClick = { target = item.id; pickDate = true }) {
+                            Text("🔔 " + formatTime(at) + if (item.repeat != Repeat.NONE) " · ${item.repeat.label.lowercase()}" else "",
+                                style = MaterialTheme.typography.labelMedium)
+                        }
+                        TextButton(onClick = { update(item.copy(remindAt = null, repeat = Repeat.NONE)) }) {
+                            Text("убрать", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
                 }
             }
             Row(Modifier.padding(start = 8.dp)) {
@@ -451,13 +472,13 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
         dismissButton = { TextButton(onClick = { askDelete = false }) { Text("Отмена") } },
     )
     if (pickDate) DayDialog(
-        initial = note.remindAt,
+        initial = targetAt,
         onDismiss = { pickDate = false },
         onPick = { pickDate = false; pickedDay = it },
     )
     pickedDay?.let { day ->
         TimeDialog(
-            initial = note.remindAt,
+            initial = targetAt,
             onDismiss = { pickedDay = null },
             onPick = { h, m ->
                 pickedDay = null
@@ -470,11 +491,14 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
     }
     pickedTime?.let { at ->
         RepeatDialog(
-            initial = note.repeat,
+            initial = targetRepeat,
             onDismiss = { pickedTime = null },
             onPick = { rep ->
                 pickedTime = null
-                note = note.copy(remindAt = at, repeat = rep, done = false)
+                note = if (target == 0L) note.copy(remindAt = at, repeat = rep, done = false)
+                else note.copy(items = note.items.map {
+                    if (it.id == target) it.copy(remindAt = at, repeat = rep, checked = false) else it
+                })
                 host.askNotificationPermission()
             },
         )

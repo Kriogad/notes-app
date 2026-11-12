@@ -132,7 +132,7 @@ class MainActivity : ComponentActivity(), Host {
             intent.hasExtra(EXTRA_OPEN) -> {
                 openRequest = intent.getLongExtra(EXTRA_OPEN, -1)
                 // Открыли из напоминания — значит увидели, больше не повторять
-                if (intent.getBooleanExtra(EXTRA_ACK, false)) Reminders.ack(this, openRequest!!)
+                if (intent.getBooleanExtra(EXTRA_ACK, false)) Reminders.ack(this, openRequest!!, intent.getLongExtra(EXTRA_ITEM, 0))
             }
         }
     }
