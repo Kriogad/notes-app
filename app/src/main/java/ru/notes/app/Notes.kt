@@ -41,18 +41,29 @@ data class Note(
 class App : Application() {
     override fun onCreate() {
         super.onCreate()
+        Vault.init(this)
+        Backup.init(this)
         Notes.init(this)
         Reminders.createChannel(this)
     }
 }
 
+/** Общий интерфейс для обычных и секретных заметок — редактор работает с любым. */
+interface NoteStore {
+    val notes: StateFlow<List<Note>>
+    fun get(id: Long): Note?
+    fun upsert(note: Note)
+    fun delete(id: Long)
+    fun setDone(id: Long, done: Boolean)
+}
+
 /** Хранилище заметок: JSON-файл + StateFlow для экрана и виджета. */
-object Notes {
+object Notes : NoteStore {
     private lateinit var app: Context
     private lateinit var file: File
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val state = MutableStateFlow<List<Note>>(emptyList())
-    val notes: StateFlow<List<Note>> = state
+    override val notes: StateFlow<List<Note>> = state
 
     @Synchronized
     fun init(context: Context) {
@@ -62,21 +73,21 @@ object Notes {
         state.value = sort(load())
     }
 
-    fun get(id: Long): Note? = state.value.find { it.id == id }
+    override fun get(id: Long): Note? = state.value.find { it.id == id }
 
     @Synchronized
-    fun upsert(note: Note) {
+    override fun upsert(note: Note) {
         commit(state.value.filter { it.id != note.id } + note)
         Reminders.sync(app, note)
     }
 
     @Synchronized
-    fun delete(id: Long) {
+    override fun delete(id: Long) {
         commit(state.value.filter { it.id != id })
         Reminders.cancel(app, id)
     }
 
-    fun setDone(id: Long, done: Boolean) {
+    override fun setDone(id: Long, done: Boolean) {
         val n = get(id) ?: return
         if (n.done != done) upsert(n.copy(done = done, updated = System.currentTimeMillis()))
     }
@@ -97,6 +108,14 @@ object Notes {
         upsert(n.copy(items = n.items.map { it.copy(checked = false) }))
     }
 
+    /** Перечитать файл (после восстановления из копии). */
+    @Synchronized
+    fun reload() {
+        state.value = sort(load())
+        state.value.forEach { Reminders.sync(app, it) }
+        refreshWidgets()
+    }
+
     fun refreshWidgets() {
         scope.launch {
             runCatching { NotesWidget().updateAll(app) }
@@ -113,6 +132,7 @@ object Notes {
         state.value = sorted
         save(sorted)
         refreshWidgets()
+        Backup.schedule(app)
     }
 
     private fun load(): List<Note> {
@@ -135,7 +155,7 @@ object Notes {
         tmp.renameTo(file)
     }
 
-    private fun toJson(n: Note) = JSONObject()
+    fun toJson(n: Note) = JSONObject()
         .put("id", n.id)
         .put("title", n.title)
         .put("text", n.text)
@@ -146,7 +166,7 @@ object Notes {
         })
         .apply { n.remindAt?.let { put("remind", it) } }
 
-    private fun fromJson(o: JSONObject) = Note(
+    fun fromJson(o: JSONObject) = Note(
         id = o.getLong("id"),
         title = o.optString("title"),
         text = o.optString("text"),

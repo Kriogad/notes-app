@@ -3,6 +3,10 @@ package ru.notes.app
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.hardware.biometrics.BiometricManager
+import android.hardware.biometrics.BiometricPrompt
+import android.os.CancellationSignal
+import javax.crypto.Cipher
 import android.os.Build
 import android.os.Bundle
 import android.speech.RecognizerIntent
@@ -25,7 +29,7 @@ import java.util.Locale
 
 const val NEW_NOTE = 0L
 
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), Host {
     /** Что открыть по запросу виджета/уведомления: id заметки или NEW_NOTE. */
     private var openRequest by mutableStateOf<Long?>(null)
     private var onVoiceText: ((String) -> Unit)? = null
@@ -51,12 +55,7 @@ class MainActivity : ComponentActivity() {
                 else -> lightColorScheme()
             }
             MaterialTheme(colorScheme = colors) {
-                NotesApp(
-                    openRequest = openRequest,
-                    onOpenHandled = { openRequest = null },
-                    onVoice = ::listen,
-                    onReminderSet = ::askNotificationPermission,
-                )
+                NotesApp(this, openRequest, onOpenHandled = { openRequest = null })
                 UpdateCheck()
             }
         }
@@ -67,14 +66,28 @@ class MainActivity : ComponentActivity() {
         handle(intent)
     }
 
+    private var stoppedAt = 0L
+
+    override fun onStop() {
+        super.onStop()
+        stoppedAt = System.currentTimeMillis()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Секретный раздел закрывается, если приложение было свёрнуто дольше минуты
+        if (stoppedAt > 0 && System.currentTimeMillis() - stoppedAt > 60_000) Vault.lock()
+    }
+
     private fun handle(intent: Intent) {
+        intent.data?.let { if (Backup.handleRedirect(this, it)) Backup.schedule(this) }
         when {
             intent.getBooleanExtra(EXTRA_NEW, false) -> openRequest = NEW_NOTE
             intent.hasExtra(EXTRA_OPEN) -> openRequest = intent.getLongExtra(EXTRA_OPEN, -1)
         }
     }
 
-    private fun listen(onText: (String) -> Unit) {
+    override fun listen(onText: (String) -> Unit) {
         onVoiceText = onText
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -87,7 +100,28 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun askNotificationPermission() {
+    override fun askNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33) notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    override fun bioAvailable(): Boolean = Build.VERSION.SDK_INT >= 30 &&
+        getSystemService(BiometricManager::class.java)
+            .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
+
+    override fun biometric(cipher: Cipher, title: String, onOk: (Cipher) -> Unit) {
+        if (Build.VERSION.SDK_INT < 30) return
+        val prompt = BiometricPrompt.Builder(this)
+            .setTitle(title)
+            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+            .setNegativeButton("Ввести пароль", mainExecutor) { _, _ -> }
+            .build()
+        prompt.authenticate(
+            BiometricPrompt.CryptoObject(cipher), CancellationSignal(), mainExecutor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    result.cryptoObject?.cipher?.let(onOk)
+                }
+            },
+        )
     }
 }

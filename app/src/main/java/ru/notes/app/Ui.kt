@@ -23,6 +23,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
@@ -79,28 +81,51 @@ private val timeFmt = DateTimeFormatter.ofPattern("d MMM, HH:mm")
 private fun formatTime(ms: Long) = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault()).format(timeFmt)
 
 @Composable
-fun NotesApp(
-    openRequest: Long?,
-    onOpenHandled: () -> Unit,
-    onVoice: ((String) -> Unit) -> Unit,
-    onReminderSet: () -> Unit,
-) {
+fun NotesApp(host: Host, openRequest: Long?, onOpenHandled: () -> Unit) {
     val notes by Notes.notes.collectAsState()
+    val vaultOpen by Vault.unlocked.collectAsState()
+    var section by rememberSaveable { mutableStateOf(Section.Main) }
     var editing by rememberSaveable { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(openRequest) {
         openRequest?.let {
+            section = Section.Main
             editing = if (it == NEW_NOTE) System.currentTimeMillis() else it
             onOpenHandled()
         }
     }
 
+    val secret = section == Section.Vault
     val id = editing
-    if (id == null) {
-        ListScreen(notes, onOpen = { editing = it }, onNew = { editing = System.currentTimeMillis() })
-    } else key(id) {
-        EditorScreen(id, onClose = { editing = null }, onVoice = onVoice, onReminderSet = onReminderSet)
+    when {
+        id != null && (!secret || vaultOpen) -> key(id) {
+            EditorScreen(id, if (secret) Vault else Notes, secret, host, onClose = { editing = null })
+        }
+        section == Section.Settings -> SettingsScreen(onBack = { section = Section.Main })
+        secret -> VaultScreen(
+            host,
+            onBack = { Vault.lock(); section = Section.Main },
+            onOpen = { editing = it },
+            onNew = { editing = System.currentTimeMillis() },
+        )
+        else -> ListScreen(
+            notes,
+            onOpen = { editing = it },
+            onNew = { editing = System.currentTimeMillis() },
+            onVault = { section = Section.Vault },
+            onSettings = { section = Section.Settings },
+        )
     }
+}
+
+enum class Section { Main, Vault, Settings }
+
+/** Что экранам нужно от Activity. */
+interface Host {
+    fun listen(onText: (String) -> Unit)
+    fun askNotificationPermission()
+    fun bioAvailable(): Boolean
+    fun biometric(cipher: javax.crypto.Cipher, title: String, onOk: (javax.crypto.Cipher) -> Unit)
 }
 
 // ---------------- Список, архив, поиск ----------------
@@ -109,7 +134,13 @@ fun Note.matches(q: String) = title.contains(q, true) || text.contains(q, true) 
     items.any { it.text.contains(q, true) }
 
 @Composable
-private fun ListScreen(notes: List<Note>, onOpen: (Long) -> Unit, onNew: () -> Unit) {
+private fun ListScreen(
+    notes: List<Note>,
+    onOpen: (Long) -> Unit,
+    onNew: () -> Unit,
+    onVault: () -> Unit,
+    onSettings: () -> Unit,
+) {
     var archive by rememberSaveable { mutableStateOf(false) }
     var searching by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -147,7 +178,11 @@ private fun ListScreen(notes: List<Note>, onOpen: (Long) -> Unit, onNew: () -> U
                 },
                 actions = {
                     if (!searching) IconButton(onClick = { searching = true }) { Icon(Icons.Filled.Search, "Поиск") }
-                    if (!searching && !archive) TextButton(onClick = { archive = true }) { Text("Архив ($archived)") }
+                    if (!searching && !archive) {
+                        TextButton(onClick = { archive = true }) { Text("Архив ($archived)") }
+                        IconButton(onClick = onVault) { Icon(Icons.Filled.Lock, "Секретные заметки") }
+                        IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, "Настройки и резервная копия") }
+                    }
                 },
             )
         },
@@ -173,7 +208,7 @@ private fun ListScreen(notes: List<Note>, onOpen: (Long) -> Unit, onNew: () -> U
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 items(shown, key = { it.id }) { note ->
-                    NoteCard(note, Modifier.animateItem()) { onOpen(note.id) }
+                    NoteCard(note, Notes, Modifier.animateItem()) { onOpen(note.id) }
                 }
             }
         }
@@ -181,10 +216,10 @@ private fun ListScreen(notes: List<Note>, onOpen: (Long) -> Unit, onNew: () -> U
 }
 
 @Composable
-private fun NoteCard(note: Note, modifier: Modifier, onClick: () -> Unit) {
+fun NoteCard(note: Note, store: NoteStore, modifier: Modifier, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = modifier.fillMaxWidth()) {
         Row(Modifier.padding(end = 12.dp, top = 4.dp, bottom = 8.dp)) {
-            Checkbox(checked = note.done, onCheckedChange = { Notes.setDone(note.id, it) })
+            Checkbox(checked = note.done, onCheckedChange = { store.setDone(note.id, it) })
             Column(Modifier.weight(1f).padding(top = 12.dp).alpha(if (note.done) 0.6f else 1f)) {
                 Text(
                     note.displayTitle,
@@ -218,28 +253,29 @@ private fun NoteCard(note: Note, modifier: Modifier, onClick: () -> Unit) {
     }
 }
 
+/** Делит надиктованную фразу на пункты: по запятым и союзам «и», «потом», «затем». */
+fun splitItems(phrase: String): List<String> =
+    phrase.split(Regex("[,;.]|\\s+(?:и|потом|затем|а также)\\s+", RegexOption.IGNORE_CASE))
+        .map { it.trim() }.filter { it.isNotEmpty() }
+        .map { it.replaceFirstChar { c -> c.uppercase() } }
+
 private fun TextStyle.strike(on: Boolean) = if (on) copy(textDecoration = TextDecoration.LineThrough) else this
 
 // ---------------- Редактор ----------------
 
 @Composable
-private fun EditorScreen(
-    id: Long,
-    onClose: () -> Unit,
-    onVoice: ((String) -> Unit) -> Unit,
-    onReminderSet: () -> Unit,
-) {
-    var note by remember { mutableStateOf(Notes.get(id) ?: Note(id)) }
+private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host, onClose: () -> Unit) {
+    var note by remember { mutableStateOf(store.get(id) ?: Note(id)) }
     var pickDate by remember { mutableStateOf(false) }
     var pickedDay by remember { mutableStateOf<Long?>(null) }
     var askDelete by remember { mutableStateOf(false) }
 
     // Автосохранение: через полсекунды после правки и при выходе
     fun persist() {
-        val stored = Notes.get(id)
+        val stored = store.get(id)
         when {
-            note.isBlank -> if (stored != null) Notes.delete(id)
-            !note.sameContent(stored) -> Notes.upsert(note.copy(updated = System.currentTimeMillis()))
+            note.isBlank -> if (stored != null) store.delete(id)
+            !note.sameContent(stored) -> store.upsert(note.copy(updated = System.currentTimeMillis()))
         }
     }
     LaunchedEffect(note) { delay(500); persist() }
@@ -255,9 +291,10 @@ private fun EditorScreen(
                 },
                 actions = {
                     IconButton(onClick = {
-                        onVoice { t -> note = note.copy(text = if (note.text.isBlank()) t else note.text.trimEnd() + "\n" + t) }
-                    }) { Icon(painterResource(R.drawable.ic_mic), "Голосовой ввод") }
-                    IconButton(onClick = { pickDate = true }) { Icon(Icons.Filled.Notifications, "Напоминание") }
+                        host.listen { t -> note = note.copy(text = if (note.text.isBlank()) t else note.text.trimEnd() + "\n" + t) }
+                    }) { Icon(painterResource(R.drawable.ic_mic), "Надиктовать текст") }
+                    // Напоминание показало бы заголовок секретной заметки в уведомлении — там его нет
+                    if (!secret) IconButton(onClick = { pickDate = true }) { Icon(Icons.Filled.Notifications, "Напоминание") }
                     IconButton(onClick = { askDelete = true }) { Icon(Icons.Filled.Delete, "Удалить") }
                 },
             )
@@ -271,7 +308,7 @@ private fun EditorScreen(
 
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
                 Checkbox(note.done, { note = note.copy(done = it) })
-                Text("Выполнено (в архив)")
+                Text(if (secret) "Выполнено" else "Выполнено (в архив)")
                 note.remindAt?.let { at ->
                     AssistChip(
                         onClick = { pickDate = true },
@@ -300,12 +337,21 @@ private fun EditorScreen(
                     IconButton(onClick = { update(null) }) { Icon(Icons.Filled.Close, "Удалить пункт") }
                 }
             }
-            TextButton(
-                onClick = { note = note.copy(items = note.items + CheckItem("")) },
-                modifier = Modifier.padding(start = 8.dp),
-            ) {
-                Icon(Icons.Filled.Add, null)
-                Text("Пункт с галочкой")
+            Row(Modifier.padding(start = 8.dp)) {
+                TextButton(onClick = { note = note.copy(items = note.items + CheckItem("")) }) {
+                    Icon(Icons.Filled.Add, null)
+                    Text("Пункт с галочкой")
+                }
+                // «молоко, хлеб и яйца» → три пункта
+                TextButton(onClick = {
+                    host.listen { t ->
+                        val new = splitItems(t).map { CheckItem(it) }
+                        note = note.copy(items = note.items.filter { it.text.isNotBlank() } + new)
+                    }
+                }) {
+                    Icon(painterResource(R.drawable.ic_mic), null)
+                    Text("Надиктовать пункты")
+                }
             }
         }
     }
@@ -314,7 +360,7 @@ private fun EditorScreen(
         onDismissRequest = { askDelete = false },
         title = { Text("Удалить заметку?") },
         confirmButton = {
-            TextButton(onClick = { note = Note(id); Notes.delete(id); onClose() }) { Text("Удалить") }
+            TextButton(onClick = { note = Note(id); store.delete(id); onClose() }) { Text("Удалить") }
         },
         dismissButton = { TextButton(onClick = { askDelete = false }) { Text("Отмена") } },
     )
@@ -333,14 +379,14 @@ private fun EditorScreen(
                 val at = LocalDateTime.of(date, LocalTime.of(h, m))
                     .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
                 note = note.copy(remindAt = at, done = false)
-                onReminderSet()
+                host.askNotificationPermission()
             },
         )
     }
 }
 
 @Composable
-private fun PlainField(
+fun PlainField(
     value: String,
     onChange: (String) -> Unit,
     hint: String,
