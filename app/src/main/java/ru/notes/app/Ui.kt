@@ -46,6 +46,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.draw.zIndex
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.KeyboardActions
@@ -188,7 +196,7 @@ private fun ListScreen(
     // Поиск идёт по всем заметкам, включая архив
     val shown = when {
         searching -> if (query.isBlank()) emptyList() else notes.filter { it.matches(query.trim()) }
-        archive -> notes.filter { it.done }
+        archive -> notes.filter { it.done }.sortedByDescending { it.doneAt ?: it.updated }
         else -> notes.filter { !it.done }
     }
     BackHandler(enabled = searching || archive) {
@@ -253,7 +261,7 @@ private fun ListScreen(
             val active = notes.filter { !it.done }
             val tabs = listOf(
                 "Текучка" to active.filter { !it.isRecurring },
-                "Повторяющиеся" to active.filter { it.isRecurring }.sortedBy { it.nextRemind ?: Long.MAX_VALUE },
+                "Повторяющиеся" to active.filter { it.isRecurring },
             )
             val pager = rememberPagerState { tabs.size }
             val tabScope = rememberCoroutineScope()
@@ -304,13 +312,55 @@ private fun NoteList(list: List<Note>, empty: String, modifier: Modifier, host: 
         // Делим высоту экрана между заметками: пока места хватает, список виден целиком
         val perNote = (maxHeight - 88.dp) / list.size - 64.dp
         val maxItems = maxOf(4, (perNote / 24.dp).toInt())
+        // Перетаскивание: зажать карточку и тащить; порядок сохраняется, когда отпустили
+        val listState = rememberLazyListState()
+        val haptic = LocalHapticFeedback.current
+        var order by remember { mutableStateOf<List<Long>?>(null) }
+        var dragging by remember { mutableStateOf<Long?>(null) }
+        var dragOffset by remember { mutableStateOf(0f) }
+        val currentList by rememberUpdatedState(list)
+        val byId = list.associateBy { it.id }
+        val shown = (order ?: list.map { it.id }).mapNotNull { byId[it] }
+        val canDrag = list.none { it.done } // архив не переставляем
         LazyColumn(
             Modifier.fillMaxSize(),
+            state = listState,
             contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 88.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(list, key = { it.id }) { note ->
-                NoteCard(note, Notes, Modifier.animateItem(), maxItems, onAdd = { adding = note.id },
+            items(shown, key = { it.id }) { note ->
+                val isDragged = dragging == note.id
+                val drag = if (!canDrag) Modifier else Modifier.pointerInput(note.id) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            order = currentList.map { it.id }; dragging = note.id; dragOffset = 0f
+                        },
+                        onDrag = { change, amount ->
+                            change.consume()
+                            dragOffset += amount.y
+                            val info = listState.layoutInfo.visibleItemsInfo
+                            val cur = info.firstOrNull { it.key == dragging } ?: return@detectDragGesturesAfterLongPress
+                            val mid = cur.offset + dragOffset + cur.size / 2f
+                            val target = info.firstOrNull { it.key != dragging && mid > it.offset && mid < it.offset + it.size }
+                            val o = order
+                            if (target != null && o != null) {
+                                val from = o.indexOf(dragging ?: return@detectDragGesturesAfterLongPress)
+                                val to = o.indexOf(target.key as? Long ?: return@detectDragGesturesAfterLongPress)
+                                if (from >= 0 && to >= 0) {
+                                    order = o.toMutableList().apply { add(to, removeAt(from)) }
+                                    dragOffset -= (target.offset - cur.offset)
+                                }
+                            }
+                        },
+                        onDragEnd = { order?.let { Notes.reorder(it) }; order = null; dragging = null; dragOffset = 0f },
+                        onDragCancel = { order = null; dragging = null; dragOffset = 0f },
+                    )
+                }
+                val m = (if (isDragged) Modifier.zIndex(1f).graphicsLayer {
+                    translationY = dragOffset; scaleX = 1.03f; scaleY = 1.03f; shadowElevation = 16f
+                } else Modifier.animateItem()).then(drag)
+                NoteCard(note, Notes, m, maxItems, onAdd = { adding = note.id },
                     onDelete = { deleting = note }) { onOpen(note.id) }
             }
         }

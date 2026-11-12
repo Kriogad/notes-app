@@ -50,6 +50,8 @@ data class Note(
     val doneAt: Long? = null,
     /** Напоминание этого раза уже прозвенело, ждём «Выполнено». */
     val due: Boolean = false,
+    /** Место в списке (перетаскивание пальцем). Меньше — выше. */
+    val pos: Double? = null,
 ) {
     val seriesId get() = if (series == 0L) id else series
 
@@ -70,7 +72,7 @@ data class Note(
         }.trim().ifBlank { "Без названия" }
 
     /** Совпадает ли содержимое (без учёта времени изменения). */
-    fun sameContent(other: Note?) = other != null && copy(updated = 0) == other.copy(updated = 0)
+    fun sameContent(other: Note?) = other != null && copy(updated = 0, pos = null) == other.copy(updated = 0, pos = null)
 }
 
 class App : Application() {
@@ -106,7 +108,9 @@ object Notes : NoteStore {
         if (::app.isInitialized) return
         app = context.applicationContext
         file = File(app.filesDir, "notes.json")
-        state.value = sort(load())
+        // Старым заметкам без места — место по текущему порядку
+        state.value = sort(load().sortedWith(compareBy<Note> { it.done }.thenByDescending { it.updated })
+            .mapIndexed { i, n -> if (n.pos == null) n.copy(pos = i.toDouble()) else n })
         save(state.value)
     }
 
@@ -119,6 +123,9 @@ object Notes : NoteStore {
             completeRecurring(note)
             return
         }
+        // Место в списке: сохраняем прежнее, новая заметка — наверх
+        @Suppress("NAME_SHADOWING")
+        val note = note.copy(pos = note.pos ?: old?.pos ?: ((state.value.mapNotNull { it.pos }.minOrNull() ?: 0.0) - 1))
         commit(state.value.filter { it.id != note.id } + note)
         Reminders.sync(app, note)
     }
@@ -193,9 +200,19 @@ object Notes : NoteStore {
         }
     }
 
-    // Невыполненные сверху, внутри — свежие первыми
+    // Невыполненные сверху, внутри — в порядке, который задал пользователь
     private fun sort(list: List<Note>) =
-        list.sortedWith(compareBy<Note> { it.done }.thenByDescending { it.updated })
+        list.sortedWith(compareBy<Note> { it.done }.thenBy { it.pos ?: 0.0 })
+
+    /** Новый порядок после перетаскивания: те же места, переставленные между этими заметками. */
+    @Synchronized
+    fun reorder(ids: List<Long>) {
+        val byId = state.value.associateBy { it.id }
+        val slots = ids.mapNotNull { byId[it]?.pos }.sorted()
+        if (slots.size != ids.size) return
+        val moved = ids.mapIndexed { i, id -> id to slots[i] }.toMap()
+        commit(state.value.map { n -> moved[n.id]?.let { n.copy(pos = it) } ?: n })
+    }
 
     private fun commit(list: List<Note>) {
         val sorted = sort(list)
@@ -248,6 +265,7 @@ object Notes : NoteStore {
         .apply { n.volume?.let { put("vol", it) } }
         .apply { n.doneAt?.let { put("da", it) } }
         .apply { if (n.due) put("due", true) }
+        .apply { n.pos?.let { put("pos", it) } }
         .apply {
             if (n.attachments.isNotEmpty()) put("att", JSONArray().apply {
                 n.attachments.forEach { put(JSONObject().put("f", it.file).put("n", it.name).put("m", it.mime)) }
@@ -278,6 +296,7 @@ object Notes : NoteStore {
         volume = if (o.has("vol")) o.getInt("vol") else null,
         doneAt = if (o.has("da")) o.getLong("da") else null,
         due = o.optBoolean("due"),
+        pos = if (o.has("pos")) o.getDouble("pos") else null,
         attachments = o.optJSONArray("att")?.let { a ->
             List(a.length()) { i -> a.getJSONObject(i).let { Attachment(it.getString("f"), it.optString("n"), it.optString("m")) } }
         } ?: emptyList(),
