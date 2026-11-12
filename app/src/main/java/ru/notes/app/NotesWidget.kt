@@ -65,6 +65,11 @@ class NotesWidget : GlanceAppWidget() {
                     TextStyle(onSurface, fontSize = 18.sp, fontWeight = FontWeight.Bold),
                 )
                 Image(
+                    ImageProvider(R.drawable.ic_mic), "Надиктовать заметку",
+                    GlanceModifier.size(40.dp).padding(8.dp).clickable(actionStartActivity<VoiceActivity>()),
+                    colorFilter = ColorFilter.tint(GlanceTheme.colors.primary),
+                )
+                Image(
                     ImageProvider(R.drawable.ic_add), "Новая заметка",
                     GlanceModifier.size(40.dp).padding(8.dp)
                         .clickable(actionStartActivity<MainActivity>(actionParametersOf(KeyNew to true))),

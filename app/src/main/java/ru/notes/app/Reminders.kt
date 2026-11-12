@@ -31,6 +31,7 @@ const val EXTRA_OPEN = "open_id"
 const val EXTRA_NEW = "new_note"
 const val EXTRA_ACK = "ack"
 const val EXTRA_ITEM = "item"
+const val EXTRA_VOICE_TO = "voice_to"
 
 enum class Repeat(val key: String, val label: String) {
     NONE("", "Не повторять"),

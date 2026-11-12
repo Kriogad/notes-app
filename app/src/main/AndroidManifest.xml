@@ -64,6 +64,13 @@
         </receiver>
 
         <activity
+            android:name=".VoiceActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <activity
             android:name=".NoteWidgetConfig"
             android:taskAffinity=""
             android:excludeFromRecents="true"

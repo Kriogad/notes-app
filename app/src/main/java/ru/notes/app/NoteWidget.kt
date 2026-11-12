@@ -75,6 +75,7 @@ import androidx.glance.text.Text as GlanceText
 private val KeyNote = ActionParameters.Key<Long>("note")
 private val KeyIndex = ActionParameters.Key<Int>("index")
 private val KeyOpenNote = ActionParameters.Key<Long>(EXTRA_OPEN)
+private val KeyVoiceTo = ActionParameters.Key<Long>(EXTRA_VOICE_TO)
 
 /** Какой заметке принадлежит какой виджет. Flow — чтобы виджет сразу видел новый выбор. */
 object WidgetPrefs {
@@ -160,6 +161,12 @@ class NoteWidget : GlanceAppWidget() {
                         colorFilter = ColorFilter.tint(GlanceTheme.colors.primary),
                     )
                 }
+                Image(
+                    ImageProvider(R.drawable.ic_mic), "Надиктовать пункты",
+                    GlanceModifier.size(40.dp).glancePadding(8.dp)
+                        .clickable(actionStartActivity<VoiceActivity>(actionParametersOf(KeyVoiceTo to note.id))),
+                    colorFilter = ColorFilter.tint(GlanceTheme.colors.primary),
+                )
                 Image(
                     ImageProvider(R.drawable.ic_swap), "Выбрать другую заметку",
                     GlanceModifier.size(40.dp).glancePadding(10.dp).clickable(pick),
