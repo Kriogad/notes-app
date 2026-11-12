@@ -85,6 +85,25 @@ object Notes {
         get(id)?.let { setDone(id, !it.done) }
     }
 
+    /** Галочка у пункта списка (из виджета). Время изменения не трогаем, чтобы список не прыгал. */
+    fun toggleItem(id: Long, index: Int) {
+        val n = get(id) ?: return
+        if (index !in n.items.indices) return
+        upsert(n.copy(items = n.items.toMutableList().also { it[index] = it[index].copy(checked = !it[index].checked) }))
+    }
+
+    fun uncheckAll(id: Long) {
+        val n = get(id) ?: return
+        upsert(n.copy(items = n.items.map { it.copy(checked = false) }))
+    }
+
+    fun refreshWidgets() {
+        scope.launch {
+            runCatching { NotesWidget().updateAll(app) }
+            runCatching { NoteWidget().updateAll(app) }
+        }
+    }
+
     // Невыполненные сверху, внутри — свежие первыми
     private fun sort(list: List<Note>) =
         list.sortedWith(compareBy<Note> { it.done }.thenByDescending { it.updated })
@@ -93,7 +112,7 @@ object Notes {
         val sorted = sort(list)
         state.value = sorted
         save(sorted)
-        scope.launch { runCatching { NotesWidget().updateAll(app) } }
+        refreshWidgets()
     }
 
     private fun load(): List<Note> {

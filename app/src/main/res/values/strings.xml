@@ -2,4 +2,7 @@
 <resources>
     <string name="app_name">Заметки</string>
     <string name="widget_description">Список заметок с галочками</string>
+    <string name="widget_list_name">Все заметки</string>
+    <string name="widget_note_name">Одна заметка (список покупок)</string>
+    <string name="note_widget_description">Пункты одной заметки — отмечайте галочками прямо на экране</string>
 </resources>
