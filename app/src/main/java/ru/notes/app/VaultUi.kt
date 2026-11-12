@@ -229,11 +229,21 @@ private fun RemindSettings(host: Host) {
         15 to "Через 15 минут", 30 to "Через 30 минут", 60 to "Через час")
 
     Text("Напоминания", style = MaterialTheme.typography.titleMedium)
+    val scope = rememberCoroutineScope()
     OutlinedButton(onClick = {
         host.pickSound(Reminders.soundUri(ctx)) { uri ->
             Reminders.setSound(ctx, uri); sound = Reminders.soundTitle(ctx)
         }
     }, modifier = Modifier.fillMaxWidth()) { Text("Мелодия: $sound") }
+    OutlinedButton(onClick = {
+        host.pickAudio { src ->
+            scope.launch {
+                val uri = Reminders.importSound(ctx, src)
+                if (uri == null) Toast.makeText(ctx, "Не удалось взять этот файл", Toast.LENGTH_LONG).show()
+                else { Reminders.setSound(ctx, uri); sound = Reminders.soundTitle(ctx) }
+            }
+        }
+    }, modifier = Modifier.fillMaxWidth()) { Text("Свой MP3 из файлов") }
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Звенеть, пока не нажму")

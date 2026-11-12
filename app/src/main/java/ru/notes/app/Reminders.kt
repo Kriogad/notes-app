@@ -13,6 +13,12 @@ import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.net.Uri
+import android.content.ContentValues
+import android.os.Environment
+import android.provider.MediaStore
+import android.provider.OpenableColumns
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -91,6 +97,31 @@ object Reminders {
         nm.deleteNotificationChannel(channelId(ctx))
         prefs(ctx).edit().putString("sound", uri?.toString()).putInt("chan", prefs(ctx).getInt("chan", 1) + 1).apply()
         createChannel(ctx)
+    }
+
+    /**
+     * Свой MP3: копируем в системную папку «Alarms» — оттуда звук уведомления
+     * гарантированно может проиграть сама система.
+     */
+    suspend fun importSound(ctx: Context, src: Uri): Uri? = withContext(Dispatchers.IO) {
+        runCatching {
+            val cr = ctx.contentResolver
+            val name = cr.query(src, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                if (it.moveToFirst()) it.getString(0) else null
+            } ?: "Мелодия заметок.mp3"
+            if (Build.VERSION.SDK_INT < 29) return@runCatching src
+            val values = ContentValues().apply {
+                put(MediaStore.Audio.Media.DISPLAY_NAME, name)
+                put(MediaStore.Audio.Media.MIME_TYPE, cr.getType(src) ?: "audio/mpeg")
+                put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_ALARMS)
+                put(MediaStore.Audio.Media.IS_ALARM, 1)
+                put(MediaStore.Audio.Media.IS_PENDING, 1)
+            }
+            val dst = cr.insert(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values)!!
+            cr.openInputStream(src)!!.use { i -> cr.openOutputStream(dst)!!.use { i.copyTo(it) } }
+            cr.update(dst, ContentValues().apply { put(MediaStore.Audio.Media.IS_PENDING, 0) }, null, null)
+            dst
+        }.getOrNull()
     }
 
     private fun channelId(ctx: Context) = "remind_" + prefs(ctx).getInt("chan", 1)

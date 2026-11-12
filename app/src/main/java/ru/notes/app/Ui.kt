@@ -53,13 +53,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.TimePicker
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.foundation.Image
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material3.rememberDatePickerState
-import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -143,6 +141,7 @@ interface Host {
     fun pickPhotos(onPicked: (List<android.net.Uri>) -> Unit)
     fun pickFiles(onPicked: (List<android.net.Uri>) -> Unit)
     fun pickSound(current: android.net.Uri?, onPicked: (android.net.Uri?) -> Unit)
+    fun pickAudio(onPicked: (android.net.Uri) -> Unit)
 }
 
 // ---------------- Список, архив, поиск ----------------
@@ -555,11 +554,19 @@ private fun RepeatDialog(initial: Repeat, onDismiss: () -> Unit, onPick: (Repeat
 private fun TimeDialog(initial: Long?, onDismiss: () -> Unit, onPick: (Int, Int) -> Unit) {
     val t = initial?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalTime() }
         ?: LocalTime.now().plusHours(1).withMinute(0)
-    val state = rememberTimePickerState(t.hour, t.minute, is24Hour = true)
+    var h by remember { mutableStateOf(t.hour) }
+    var m by remember { mutableStateOf(t.minute) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = { onPick(state.hour, state.minute) }) { Text("Готово") } },
+        title = { Text("Время") },
+        confirmButton = { TextButton(onClick = { onPick(h, m) }) { Text("Далее") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
-        text = { TimePicker(state) },
+        text = {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                Wheel(24, t.hour) { h = it }
+                Text(":", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(horizontal = 8.dp))
+                Wheel(60, t.minute) { m = it }
+            }
+        },
     )
 }

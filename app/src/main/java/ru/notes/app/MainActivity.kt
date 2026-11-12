@@ -63,6 +63,14 @@ class MainActivity : ComponentActivity(), Host {
         }
     }
 
+    private var onAudio: ((Uri) -> Unit)? = null
+    private val audioPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { u -> u?.let { onAudio?.invoke(it) } }
+
+    override fun pickAudio(onPicked: (Uri) -> Unit) {
+        onAudio = onPicked
+        audioPicker.launch("audio/*")
+    }
+
     override fun pickSound(current: Uri?, onPicked: (Uri?) -> Unit) {
         onSound = onPicked
         soundPicker.launch(
