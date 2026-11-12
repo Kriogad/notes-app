@@ -46,6 +46,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.foundation.pager.HorizontalPager
@@ -127,7 +133,7 @@ fun NotesApp(host: Host, openRequest: Long?, onOpenHandled: () -> Unit) {
             onNew = { editing = System.currentTimeMillis() },
         )
         else -> ListScreen(
-            notes,
+            notes, host,
             onOpen = { editing = it },
             onNew = { editing = System.currentTimeMillis() },
             onVault = { section = Section.Vault },
@@ -158,6 +164,7 @@ fun Note.matches(q: String) = title.contains(q, true) || text.contains(q, true) 
 @Composable
 private fun ListScreen(
     notes: List<Note>,
+    host: Host,
     onOpen: (Long) -> Unit,
     onNew: () -> Unit,
     onVault: () -> Unit,
@@ -229,7 +236,7 @@ private fun ListScreen(
             else -> "Заметок пока нет.\nНажмите +, чтобы добавить."
         }
         if (searching || archive) {
-            NoteList(shown, empty, Modifier.padding(pad), onOpen)
+            NoteList(shown, empty, Modifier.padding(pad), host, onOpen)
         } else {
             // Вкладки: обычные заметки и повторяющиеся (листаются свайпом)
             val active = notes.filter { !it.done }
@@ -253,7 +260,7 @@ private fun ListScreen(
                     NoteList(
                         tabs[page].second,
                         if (page == 0) empty else "Здесь будут заметки с повтором: «каждый месяц», «каждый день»…\nПовтор ставится в напоминании 🔔.",
-                        Modifier, onOpen,
+                        Modifier, host, onOpen,
                     )
                 }
             }
@@ -263,7 +270,9 @@ private fun ListScreen(
 }
 
 @Composable
-private fun NoteList(list: List<Note>, empty: String, modifier: Modifier, onOpen: (Long) -> Unit) {
+private fun NoteList(list: List<Note>, empty: String, modifier: Modifier, host: Host, onOpen: (Long) -> Unit) {
+    var adding by remember { mutableStateOf<Long?>(null) }
+    adding?.let { QuickAdd(it, host) { adding = null } }
     if (list.isEmpty()) {
         Box(modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
             Text(empty, color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center)
@@ -280,14 +289,25 @@ private fun NoteList(list: List<Note>, empty: String, modifier: Modifier, onOpen
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(list, key = { it.id }) { note ->
-                NoteCard(note, Notes, Modifier.animateItem(), maxItems) { onOpen(note.id) }
+                NoteCard(note, Notes, Modifier.animateItem(), maxItems, onAdd = { adding = note.id }) { onOpen(note.id) }
             }
         }
     }
 }
 
 @Composable
-fun NoteCard(note: Note, store: NoteStore, modifier: Modifier, maxItems: Int = 4, onClick: () -> Unit) {
+fun NoteCard(
+    note: Note,
+    store: NoteStore,
+    modifier: Modifier,
+    maxItems: Int = 4,
+    onAdd: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    // Галочка у пункта прямо на карточке, без захода в заметку
+    fun toggle(item: CheckItem) = store.upsert(
+        note.copy(items = note.items.map { if (it.id == item.id) it.copy(checked = !it.checked) else it })
+    )
     Card(onClick = onClick, modifier = modifier.fillMaxWidth()) {
         Row(Modifier.padding(end = 12.dp, top = 4.dp, bottom = 8.dp)) {
             Checkbox(checked = note.done, onCheckedChange = { store.setDone(note.id, it) })
@@ -302,11 +322,13 @@ fun NoteCard(note: Note, store: NoteStore, modifier: Modifier, maxItems: Int = 4
                 }
                 // Невыполненные пункты первыми — их важнее видеть
                 note.items.sortedBy { it.checked }.take(maxItems).forEach {
+                    val item = it
                     Text(
                         (if (it.checked) "☑ " else "☐ ") + it.text +
                             (it.remindAt?.let { r -> "  🔔 " + formatTime(r) } ?: ""),
                         style = MaterialTheme.typography.bodyMedium.strike(it.checked),
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth().clickable { toggle(item) }.padding(vertical = 3.dp),
                     )
                 }
                 if (note.items.size > maxItems) {
@@ -334,8 +356,56 @@ fun NoteCard(note: Note, store: NoteStore, modifier: Modifier, maxItems: Int = 4
                     )
                 }
             }
+            if (onAdd != null && !note.done) {
+                IconButton(onClick = onAdd, modifier = Modifier.padding(top = 4.dp)) {
+                    Icon(Icons.Filled.Add, "Добавить пункт", tint = MaterialTheme.colorScheme.primary)
+                }
+            }
         }
     }
+}
+
+/** Быстрое добавление пунктов с главного экрана: вписал → Enter → следующий; или голосом. */
+@Composable
+private fun QuickAdd(noteId: Long, host: Host, onDismiss: () -> Unit) {
+    val note = Notes.notes.collectAsState().value.find { it.id == noteId }
+    if (note == null) { LaunchedEffect(Unit) { onDismiss() }; return }
+    var text by remember { mutableStateOf("") }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    fun add(vararg t: String) {
+        val new = t.map { it.trim() }.filter { it.isNotEmpty() }.map { CheckItem(it) }
+        if (new.isEmpty()) return
+        val n = Notes.get(noteId) ?: return
+        Notes.upsert(n.copy(items = n.items.filter { it.text.isNotBlank() } + new))
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("В «${note.displayTitle}»", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = text, onValueChange = { text = it },
+                        placeholder = { Text("Новый пункт") }, singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done, capitalization = KeyboardCapitalization.Sentences),
+                        keyboardActions = KeyboardActions(onDone = { add(text); text = "" }),
+                        modifier = Modifier.weight(1f).focusRequester(focus),
+                    )
+                    IconButton(onClick = { host.listen { t -> add(*splitItems(t).toTypedArray()) } }) {
+                        Icon(painterResource(R.drawable.ic_mic), "Надиктовать пункты")
+                    }
+                }
+                val last = note.items.filter { it.text.isNotBlank() }.takeLast(3)
+                if (last.isNotEmpty()) Text(
+                    "Последние: " + last.joinToString(", ") { it.text },
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.padding(top = 8.dp), maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { add(text); onDismiss() }) { Text("Готово") } },
+    )
 }
 
 /** Делит надиктованную фразу на пункты: по запятым и союзам «и», «потом», «затем». */
