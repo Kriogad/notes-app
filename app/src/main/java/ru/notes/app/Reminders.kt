@@ -73,6 +73,9 @@ object Reminders {
     private const val ACTION_SNOOZE_60 = "ru.notes.app.SNOOZE60"
     private const val EXTRA_ID = "id"
     private const val TEST_ID = 1
+    private const val QUIET = "remind_quiet"
+    private const val ACTION_STOP = "ru.notes.app.STOP"
+
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("remind", Context.MODE_PRIVATE)
 
@@ -87,6 +90,10 @@ object Reminders {
 
     fun insistent(ctx: Context) = prefs(ctx).getBoolean("insistent", true)
     fun setInsistent(ctx: Context, on: Boolean) = prefs(ctx).edit().putBoolean("insistent", on).apply()
+
+    /** Громкость напоминаний по умолчанию, % от максимума будильника. */
+    fun volume(ctx: Context) = prefs(ctx).getInt("volume", 80)
+    fun setVolume(ctx: Context, v: Int) = prefs(ctx).edit().putInt("volume", v).apply()
 
     /** Через сколько минут напомнить снова, если не отреагировал. 0 — не напоминать. */
     fun nagMinutes(ctx: Context) = prefs(ctx).getInt("nag", 15)
@@ -130,15 +137,6 @@ object Reminders {
     fun titleOf(ctx: Context, sound: String?): String = if (sound == null) "Как в настройках" else
         runCatching { RingtoneManager.getRingtone(ctx, Uri.parse(sound))?.getTitle(ctx) }.getOrNull() ?: "Своя мелодия"
 
-    /** У каждой своей мелодии — свой канал (звук канала Android менять не даёт). */
-    private fun channelFor(ctx: Context, sound: String?): String {
-        if (sound == null) return channelId(ctx)
-        val id = "remind_snd_" + sound.hashCode().toUInt()
-        val nm = ctx.getSystemService(NotificationManager::class.java)
-        if (nm.getNotificationChannel(id) == null) nm.createNotificationChannel(channel(id, "Напоминания: " + titleOf(ctx, sound), Uri.parse(sound)))
-        return id
-    }
-
     private fun channel(id: String, name: String, sound: Uri?) =
         NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH).apply {
             // Громкость будильника, а не тихих уведомлений
@@ -155,7 +153,12 @@ object Reminders {
     fun createChannel(ctx: Context) {
         val nm = ctx.getSystemService(NotificationManager::class.java)
         nm.deleteNotificationChannel("reminders") // канал старых версий
-        nm.createNotificationChannel(channel(channelId(ctx), "Напоминания", soundUri(ctx)))
+        // Старые каналы «по мелодии» больше не нужны: звук теперь играет само приложение
+        nm.notificationChannels.filter { it.id.startsWith("remind_snd_") }.forEach { nm.deleteNotificationChannel(it.id) }
+        // Запасной канал со звуком — если телефон не дал запустить свой проигрыватель
+        nm.createNotificationChannel(channel(channelId(ctx), "Напоминания (запасной звук)", soundUri(ctx)))
+        // Основной — без звука канала, мелодию со своей громкостью играет SoundService
+        nm.createNotificationChannel(channel(QUIET, "Напоминания", null))
     }
 
     // ---------- будильники ----------
@@ -164,14 +167,14 @@ object Reminders {
 
     private class Rem(
         val item: Long, val at: Long?, val repeat: Repeat, val done: Boolean,
-        val title: String, val text: String, val sound: String?,
+        val title: String, val text: String, val sound: String?, val volume: Int?,
     )
 
     private fun rems(n: Note): List<Rem> {
         val main = Rem(0, n.remindAt, n.repeat, n.done, n.displayTitle,
-            n.text.ifBlank { n.items.filter { !it.checked }.joinToString(", ") { it.text } }, n.sound)
+            n.text.ifBlank { n.items.filter { !it.checked }.joinToString(", ") { it.text } }, n.sound, n.volume)
         return listOf(main) + n.items.filter { it.remindAt != null }.map {
-            Rem(it.id, it.remindAt, it.repeat, n.done || it.checked, it.text.ifBlank { n.displayTitle }, n.displayTitle, it.sound)
+            Rem(it.id, it.remindAt, it.repeat, n.done || it.checked, it.text.ifBlank { n.displayTitle }, n.displayTitle, it.sound, it.volume)
         }
     }
 
@@ -239,6 +242,7 @@ object Reminders {
 
     /** Напоминание увидели: больше не повторять, убрать уведомление. */
     fun ack(ctx: Context, note: Long, item: Long) {
+        SoundService.stop(ctx)
         ctx.getSystemService(AlarmManager::class.java).cancel(broadcast(ctx, ACTION_NAG, note, item))
         setPending(ctx, key(note, item), false)
         NotificationManagerCompat.from(ctx).cancel(key(note, item).hashCode())
@@ -257,21 +261,29 @@ object Reminders {
     private fun canNotify(ctx: Context) = Build.VERSION.SDK_INT < 33 ||
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
-    private fun builder(ctx: Context, title: String, text: String, sound: String? = null) =
-        NotificationCompat.Builder(ctx, channelFor(ctx, sound))
-        .setSmallIcon(R.drawable.ic_notification)
-        .setContentTitle(title)
-        .setContentText(text)
-        .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-        .setAutoCancel(true)
-        .setCategory(NotificationCompat.CATEGORY_REMINDER)
-        .setPriority(NotificationCompat.PRIORITY_HIGH)
-        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+    private fun builder(ctx: Context, channel: String, title: String, text: String) =
+        NotificationCompat.Builder(ctx, channel)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
 
-    private fun post(ctx: Context, id: Int, b: NotificationCompat.Builder) {
-        val n = b.build()
-        if (insistent(ctx)) n.flags = n.flags or Notification.FLAG_INSISTENT // звенит, пока не нажмёшь
-        NotificationManagerCompat.from(ctx).notify(id, n)
+    /**
+     * Показ со звуком: мелодию со своей громкостью играет SoundService.
+     * Если телефон не дал его запустить — уведомление на запасном канале со своим звуком.
+     */
+    private fun ring(ctx: Context, id: Int, b: (String) -> NotificationCompat.Builder, sound: String?, volume: Int?, stop: PendingIntent) {
+        val loop = insistent(ctx)
+        val n = b(QUIET).setDeleteIntent(stop).build()
+        val uri = sound?.let(Uri::parse) ?: soundUri(ctx)
+        if (SoundService.start(ctx, id, n, uri, volume ?: volume(ctx), loop)) return
+        val f = b(channelId(ctx)).build()
+        if (loop) f.flags = f.flags or Notification.FLAG_INSISTENT
+        NotificationManagerCompat.from(ctx).notify(id, f)
     }
 
     private fun show(ctx: Context, note: Note, r: Rem) {
@@ -283,27 +295,38 @@ object Reminders {
                 .putExtra(EXTRA_OPEN, note.id).putExtra(EXTRA_ITEM, r.item).putExtra(EXTRA_ACK, true),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        post(
-            ctx, k.hashCode(),
-            builder(ctx, r.title, r.text, r.sound)
+        ring(ctx, k.hashCode(), { ch ->
+            builder(ctx, ch, r.title, r.text)
                 .setContentIntent(open)
                 .addAction(0, "Выполнено", broadcast(ctx, ACTION_DONE, note.id, r.item))
                 .addAction(0, "+10 мин", broadcast(ctx, ACTION_SNOOZE_10, note.id, r.item))
-                .addAction(0, "+1 час", broadcast(ctx, ACTION_SNOOZE_60, note.id, r.item)),
-        )
+                .addAction(0, "+1 час", broadcast(ctx, ACTION_SNOOZE_60, note.id, r.item))
+        }, r.sound, r.volume, broadcast(ctx, ACTION_STOP, note.id, r.item))
         setPending(ctx, k, true)
         val nag = nagMinutes(ctx)
         if (nag > 0) alarm(ctx, ACTION_NAG, note.id, r.item, System.currentTimeMillis() + nag * 60_000L)
     }
 
-    /** Проверка звука из настроек. */
-    fun test(ctx: Context): Boolean {
+    /** Проверка звука из настроек (или из окна напоминания — со своей мелодией и громкостью). */
+    fun test(ctx: Context, sound: String? = null, volume: Int? = null): Boolean {
         if (!canNotify(ctx)) return false
-        post(ctx, TEST_ID, builder(ctx, "Проверка напоминания", "Так будет звучать и выглядеть напоминание"))
+        val stop = PendingIntent.getBroadcast(
+            ctx, TEST_ID, Intent(ctx, ReminderReceiver::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        ring(ctx, TEST_ID, { ch ->
+            builder(ctx, ch, "Проверка напоминания", "Так будет звучать и выглядеть напоминание. Смахните, чтобы выключить.")
+                .addAction(0, "Выключить", stop)
+        }, sound, volume, stop)
         return true
     }
 
     fun handle(ctx: Context, intent: Intent) {
+        if (intent.action == ACTION_STOP) {
+            SoundService.stop(ctx)
+            if (intent.getLongExtra(EXTRA_ID, -1) == -1L) NotificationManagerCompat.from(ctx).cancel(TEST_ID)
+            return
+        }
         val id = intent.getLongExtra(EXTRA_ID, -1)
         val item = intent.getLongExtra(EXTRA_ITEM, 0)
         val note = Notes.get(id) ?: return
@@ -328,6 +351,7 @@ object Reminders {
                 }
             }
             ACTION_SNOOZE_10, ACTION_SNOOZE_60 -> {
+                SoundService.stop(ctx)
                 NotificationManagerCompat.from(ctx).cancel(key(id, item).hashCode())
                 setPending(ctx, key(id, item), true)
                 val min = if (intent.action == ACTION_SNOOZE_10) 10 else 60

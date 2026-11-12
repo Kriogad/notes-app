@@ -47,6 +47,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
@@ -318,6 +320,7 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
     val targetAt = if (target == 0L) note.remindAt else targetItem?.remindAt
     val targetRepeat = if (target == 0L) note.repeat else targetItem?.repeat ?: Repeat.NONE
     val targetSound = if (target == 0L) note.sound else targetItem?.sound
+    val targetVolume = if (target == 0L) note.volume else targetItem?.volume
     var pickedDay by remember { mutableStateOf<Long?>(null) }
     var pickedTime by remember { mutableStateOf<Long?>(null) }
     var askDelete by remember { mutableStateOf(false) }
@@ -507,13 +510,14 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
         RepeatDialog(
             initial = targetRepeat,
             initialSound = targetSound,
+            initialVolume = targetVolume,
             host = host,
             onDismiss = { pickedTime = null },
-            onPick = { rep, snd ->
+            onPick = { rep, snd, vol ->
                 pickedTime = null
-                note = if (target == 0L) note.copy(remindAt = at, repeat = rep, sound = snd, done = false)
+                note = if (target == 0L) note.copy(remindAt = at, repeat = rep, sound = snd, volume = vol, done = false)
                 else note.copy(items = note.items.map {
-                    if (it.id == target) it.copy(remindAt = at, repeat = rep, sound = snd, checked = false) else it
+                    if (it.id == target) it.copy(remindAt = at, repeat = rep, sound = snd, volume = vol, checked = false) else it
                 })
                 host.askNotificationPermission()
             },
@@ -595,14 +599,16 @@ private fun History(note: Note, onOpen: (Long) -> Unit) {
 private fun RepeatDialog(
     initial: Repeat,
     initialSound: String?,
+    initialVolume: Int?,
     host: Host,
     onDismiss: () -> Unit,
-    onPick: (Repeat, String?) -> Unit,
+    onPick: (Repeat, String?, Int?) -> Unit,
 ) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var sel by remember { mutableStateOf(initial) }
     var snd by remember { mutableStateOf(initialSound) }
+    var vol by remember { mutableStateOf(initialVolume) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Повторять") },
@@ -632,9 +638,19 @@ private fun RepeatDialog(
                     }
                 }) { Text("Свой MP3") }
                 if (snd != null) TextButton(onClick = { snd = null }) { Text("Как в настройках") }
+
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 12.dp)) {
+                    Text("Своя громкость" + (vol?.let { " — $it%" } ?: ""), Modifier.weight(1f),
+                        style = MaterialTheme.typography.titleSmall)
+                    Switch(checked = vol != null, onCheckedChange = { vol = if (it) Reminders.volume(ctx) else null })
+                }
+                vol?.let { v ->
+                    Slider(value = v.toFloat(), onValueChange = { vol = it.toInt() }, valueRange = 10f..100f, steps = 8)
+                }
+                TextButton(onClick = { Reminders.test(ctx, snd, vol) }) { Text("▶ Послушать") }
             }
         },
-        confirmButton = { TextButton(onClick = { onPick(sel, snd) }) { Text("Готово") } },
+        confirmButton = { TextButton(onClick = { SoundService.stop(ctx); onPick(sel, snd, vol) }) { Text("Готово") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
     )
 }

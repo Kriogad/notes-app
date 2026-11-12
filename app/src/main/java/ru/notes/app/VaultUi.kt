@@ -42,6 +42,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -244,6 +245,10 @@ private fun RemindSettings(host: Host) {
             }
         }
     }, modifier = Modifier.fillMaxWidth()) { Text("Свой MP3 из файлов") }
+    var volume by remember { mutableStateOf(Reminders.volume(ctx)) }
+    Text("Громкость напоминаний: $volume%")
+    Slider(value = volume.toFloat(), onValueChange = { volume = it.toInt() },
+        onValueChangeFinished = { Reminders.setVolume(ctx, volume) }, valueRange = 10f..100f, steps = 8)
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("Звенеть, пока не нажму")
