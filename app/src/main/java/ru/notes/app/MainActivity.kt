@@ -56,6 +56,7 @@ class MainActivity : ComponentActivity(), Host {
             }
             MaterialTheme(colorScheme = colors) {
                 NotesApp(this, openRequest, onOpenHandled = { openRequest = null })
+                CrashReport()
                 UpdateCheck()
             }
         }
@@ -104,9 +105,10 @@ class MainActivity : ComponentActivity(), Host {
         if (Build.VERSION.SDK_INT >= 33) notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 
-    override fun bioAvailable(): Boolean = Build.VERSION.SDK_INT >= 30 &&
+    override fun bioAvailable(): Boolean = Build.VERSION.SDK_INT >= 30 && runCatching {
         getSystemService(BiometricManager::class.java)
             .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
+    }.getOrDefault(false)
 
     override fun biometric(cipher: Cipher, title: String, onOk: (Cipher) -> Unit) {
         if (Build.VERSION.SDK_INT < 30) return
@@ -115,13 +117,13 @@ class MainActivity : ComponentActivity(), Host {
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
             .setNegativeButton("Ввести пароль", mainExecutor) { _, _ -> }
             .build()
-        prompt.authenticate(
+        runCatching { prompt.authenticate(
             BiometricPrompt.CryptoObject(cipher), CancellationSignal(), mainExecutor,
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     result.cryptoObject?.cipher?.let(onOk)
                 }
             },
-        )
+        ) }.onFailure { Toast.makeText(this, "Отпечаток недоступен: ${it.message}", Toast.LENGTH_LONG).show() }
     }
 }

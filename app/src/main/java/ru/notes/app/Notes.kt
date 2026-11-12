@@ -41,6 +41,7 @@ data class Note(
 class App : Application() {
     override fun onCreate() {
         super.onCreate()
+        Crash.install(this)
         Vault.init(this)
         Backup.init(this)
         Notes.init(this)
