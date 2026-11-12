@@ -5,6 +5,7 @@ package ru.notes.app
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -202,13 +203,18 @@ private fun ListScreen(
                 Text(empty, color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center)
             }
         } else {
-            LazyColumn(
-                Modifier.fillMaxSize().padding(pad).imePadding(),
-                contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 88.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(shown, key = { it.id }) { note ->
-                    NoteCard(note, Notes, Modifier.animateItem()) { onOpen(note.id) }
+            BoxWithConstraints(Modifier.fillMaxSize().padding(pad).imePadding()) {
+                // Делим высоту экрана между заметками: пока места хватает, список виден целиком
+                val perNote = (maxHeight - 88.dp) / shown.size - 64.dp
+                val maxItems = maxOf(4, (perNote / 24.dp).toInt())
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 88.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(shown, key = { it.id }) { note ->
+                        NoteCard(note, Notes, Modifier.animateItem(), maxItems) { onOpen(note.id) }
+                    }
                 }
             }
         }
@@ -216,7 +222,7 @@ private fun ListScreen(
 }
 
 @Composable
-fun NoteCard(note: Note, store: NoteStore, modifier: Modifier, onClick: () -> Unit) {
+fun NoteCard(note: Note, store: NoteStore, modifier: Modifier, maxItems: Int = 4, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = modifier.fillMaxWidth()) {
         Row(Modifier.padding(end = 12.dp, top = 4.dp, bottom = 8.dp)) {
             Checkbox(checked = note.done, onCheckedChange = { store.setDone(note.id, it) })
@@ -229,15 +235,16 @@ fun NoteCard(note: Note, store: NoteStore, modifier: Modifier, onClick: () -> Un
                 if (note.title.isNotBlank() && note.text.isNotBlank()) {
                     Text(note.text, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
-                note.items.take(4).forEach {
+                // Невыполненные пункты первыми — их важнее видеть
+                note.items.sortedBy { it.checked }.take(maxItems).forEach {
                     Text(
                         (if (it.checked) "☑ " else "☐ ") + it.text,
                         style = MaterialTheme.typography.bodyMedium.strike(it.checked),
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
-                if (note.items.size > 4) {
-                    Text("… ещё ${note.items.size - 4}", style = MaterialTheme.typography.bodySmall)
+                if (note.items.size > maxItems) {
+                    Text("… ещё ${note.items.size - maxItems}", style = MaterialTheme.typography.bodySmall)
                 }
                 note.remindAt?.let {
                     val past = it < System.currentTimeMillis()
