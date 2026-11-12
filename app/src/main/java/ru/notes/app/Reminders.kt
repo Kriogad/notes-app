@@ -293,15 +293,20 @@ object Reminders {
         when (intent.action) {
             ACTION_REMIND -> {
                 if (!r.done) show(ctx, note, r)
-                if (r.repeat != Repeat.NONE && r.at != null) Notes.upsert(note.withRemind(item, r.repeat.next(r.at)))
+                if (r.repeat != Repeat.NONE && r.at != null) {
+                    // Заметка ждёт «Выполнено» за этот раз (due), а будильник — уже на следующий
+                    val moved = note.withRemind(item, r.repeat.next(r.at))
+                    Notes.upsert(if (item == 0L) moved.copy(due = true) else moved)
+                }
             }
             ACTION_NAG -> if (!r.done && key(id, item) in pending(ctx)) show(ctx, note, r)
             ACTION_DONE -> {
                 ack(ctx, id, item)
-                // Разовое — отмечаем выполненным; повторяющееся — ждём следующего раза
-                if (r.repeat == Repeat.NONE) {
-                    if (item == 0L) Notes.setDone(id, true)
-                    else Notes.upsert(note.copy(items = note.items.map { if (it.id == item) it.copy(checked = true) else it }))
+                // Заметка целиком: в архив (повторяющаяся — с новой копией на следующий раз).
+                // Повторяющийся пункт просто ждёт следующего раза.
+                if (item == 0L) Notes.setDone(id, true)
+                else if (r.repeat == Repeat.NONE) {
+                    Notes.upsert(note.copy(items = note.items.map { if (it.id == item) it.copy(checked = true) else it }))
                 }
             }
             ACTION_SNOOZE_10, ACTION_SNOOZE_60 -> {

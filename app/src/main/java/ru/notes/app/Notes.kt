@@ -38,7 +38,15 @@ data class Note(
     val updated: Long = System.currentTimeMillis(),
     val attachments: List<Attachment> = emptyList(),
     val repeat: Repeat = Repeat.NONE,
+    /** Серия повторяющейся заметки: у всех копий (и в архиве) одно значение. */
+    val series: Long = 0,
+    /** Когда выполнено (для истории). */
+    val doneAt: Long? = null,
+    /** Напоминание этого раза уже прозвенело, ждём «Выполнено». */
+    val due: Boolean = false,
 ) {
+    val seriesId get() = if (series == 0L) id else series
+
     val isBlank: Boolean
         get() = title.isBlank() && text.isBlank() && items.all { it.text.isBlank() } && attachments.isEmpty()
 
@@ -94,6 +102,11 @@ object Notes : NoteStore {
 
     @Synchronized
     override fun upsert(note: Note) {
+        val old = get(note.id)
+        if (old != null && !old.done && note.done && note.repeat != Repeat.NONE && note.remindAt != null) {
+            completeRecurring(note)
+            return
+        }
         commit(state.value.filter { it.id != note.id } + note)
         Reminders.sync(app, note)
     }
@@ -110,6 +123,31 @@ object Notes : NoteStore {
     override fun setDone(id: Long, done: Boolean) {
         val n = get(id) ?: return
         if (n.done != done) upsert(n.copy(done = done, updated = System.currentTimeMillis()))
+    }
+
+    /**
+     * Повторяющаяся выполнена: эта копия (с фото) — в архив для истории,
+     * вместо неё — чистая копия на следующий раз.
+     */
+    private fun completeRecurring(note: Note) {
+        val now = System.currentTimeMillis()
+        val at = note.remindAt!!
+        val archived = note.copy(
+            done = true, doneAt = now, series = note.seriesId, due = false,
+            remindAt = null, repeat = Repeat.NONE,
+            items = note.items.map { it.copy(remindAt = null, repeat = Repeat.NONE) },
+        )
+        // Прозвенело (due) — будильник уже стоит на следующий раз. Сделали заранее — переносим на следующий.
+        val nextAt = if (note.due && at > now) at else note.repeat.next(at)
+        val fresh = note.copy(
+            id = now, series = note.seriesId, done = false, doneAt = null, due = false,
+            remindAt = nextAt,
+            attachments = emptyList(), items = note.items.map { it.copy(checked = false) }, updated = now,
+        )
+        Reminders.cancelAll(app, note)
+        commit(state.value.filter { it.id != note.id } + archived + fresh)
+        Reminders.sync(app, fresh)
+        WidgetPrefs.replaceNote(app, note.id, fresh.id)
     }
 
     fun toggleDone(id: Long) {
@@ -191,6 +229,9 @@ object Notes : NoteStore {
         })
         .apply { n.remindAt?.let { put("remind", it) } }
         .apply { if (n.repeat != Repeat.NONE) put("rep", n.repeat.key) }
+        .apply { if (n.series != 0L) put("s", n.series) }
+        .apply { n.doneAt?.let { put("da", it) } }
+        .apply { if (n.due) put("due", true) }
         .apply {
             if (n.attachments.isNotEmpty()) put("att", JSONArray().apply {
                 n.attachments.forEach { put(JSONObject().put("f", it.file).put("n", it.name).put("m", it.mime)) }
@@ -214,6 +255,9 @@ object Notes : NoteStore {
         remindAt = if (o.has("remind")) o.getLong("remind") else null,
         updated = o.optLong("updated"),
         repeat = Repeat.of(o.optString("rep")),
+        series = o.optLong("s"),
+        doneAt = if (o.has("da")) o.getLong("da") else null,
+        due = o.optBoolean("due"),
         attachments = o.optJSONArray("att")?.let { a ->
             List(a.length()) { i -> a.getJSONObject(i).let { Attachment(it.getString("f"), it.optString("n"), it.optString("m")) } }
         } ?: emptyList(),

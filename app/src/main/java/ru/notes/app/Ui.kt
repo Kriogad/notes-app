@@ -111,7 +111,7 @@ fun NotesApp(host: Host, openRequest: Long?, onOpenHandled: () -> Unit) {
     val id = editing
     when {
         id != null && (!secret || vaultOpen) -> key(id) {
-            EditorScreen(id, if (secret) Vault else Notes, secret, host, onClose = { editing = null })
+            EditorScreen(id, if (secret) Vault else Notes, secret, host, onClose = { editing = null }, onOpen = { editing = it })
         }
         section == Section.Settings -> SettingsScreen(host, onBack = { section = Section.Main })
         secret -> VaultScreen(
@@ -280,6 +280,10 @@ fun NoteCard(note: Note, store: NoteStore, modifier: Modifier, maxItems: Int = 4
                             modifier = Modifier.padding(start = 4.dp))
                     }
                 }
+                note.doneAt?.let {
+                    Text("✓ выполнено " + formatTime(it), style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.outline, modifier = Modifier.padding(top = 4.dp))
+                }
                 note.remindAt?.let {
                     val past = it < System.currentTimeMillis()
                     Text(
@@ -305,7 +309,7 @@ private fun TextStyle.strike(on: Boolean) = if (on) copy(textDecoration = TextDe
 // ---------------- Редактор ----------------
 
 @Composable
-private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host, onClose: () -> Unit) {
+private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host, onClose: () -> Unit, onOpen: (Long) -> Unit) {
     var note by remember { mutableStateOf(store.get(id) ?: Note(id)) }
     var pickDate by remember { mutableStateOf(false) }
     // Для чего ставим напоминание: 0 — вся заметка, иначе id пункта
@@ -328,7 +332,9 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
     }
 
     // Автосохранение: через полсекунды после правки и при выходе
+    var finished by remember { mutableStateOf(false) }
     fun persist() {
+        if (finished) return
         val stored = store.get(id)
         when {
             note.isBlank -> if (stored != null) store.delete(id)
@@ -371,7 +377,13 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
             PlainField(note.title, { note = note.copy(title = it) }, "Заголовок", MaterialTheme.typography.titleLarge)
 
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
-                Checkbox(note.done, { note = note.copy(done = it) })
+                Checkbox(note.done, { checked ->
+                    note = note.copy(done = checked)
+                    // Повторяющаяся: копия уходит в историю, открывать дальше нечего
+                    if (checked && !secret && note.repeat != Repeat.NONE && note.remindAt != null) {
+                        persist(); finished = true; onClose()
+                    }
+                })
                 Text(if (secret) "Выполнено" else "Выполнено (в архив)")
                 note.remindAt?.let { at ->
                     AssistChip(
@@ -460,6 +472,7 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                     Text("Надиктовать пункты")
                 }
             }
+            if (!secret) History(note, onOpen)
         }
     }
 
@@ -548,6 +561,31 @@ private fun DayDialog(initial: Long?, onDismiss: () -> Unit, onPick: (Long) -> U
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена") } },
     ) { DatePicker(state) }
+}
+
+/** Прошлые разы повторяющейся заметки (с фото) — например, показания счётчика по месяцам. */
+@Composable
+private fun History(note: Note, onOpen: (Long) -> Unit) {
+    val all by Notes.notes.collectAsState()
+    val history = all.filter { it.done && it.doneAt != null && it.id != note.id && it.seriesId == note.seriesId }
+        .sortedByDescending { it.doneAt }
+    if (history.isEmpty()) return
+    Text("История (${history.size})", style = MaterialTheme.typography.titleMedium,
+        modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp))
+    history.forEach { h ->
+        Card(onClick = { onOpen(h.id) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(8.dp)) {
+                h.attachments.firstOrNull { it.isImage }?.let { Thumb(it, 56.dp) }
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text("✓ " + formatTime(h.doneAt!!), style = MaterialTheme.typography.titleSmall)
+                    val about = h.text.lineSequence().firstOrNull { it.isNotBlank() }
+                        ?: "📎 ${h.attachments.size}".takeIf { h.attachments.isNotEmpty() } ?: ""
+                    if (about.isNotBlank()) Text(about, style = MaterialTheme.typography.bodyMedium, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
 }
 
 @Composable

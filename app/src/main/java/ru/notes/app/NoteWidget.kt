@@ -91,6 +91,11 @@ object WidgetPrefs {
         (all(ctx) as MutableStateFlow).value = all(ctx).value + (widgetId to noteId)
     }
 
+    /** Повторяющаяся заметка выполнена — виджет переходит на новую копию. */
+    fun replaceNote(ctx: Context, old: Long, new: Long) {
+        all(ctx).value.filterValues { it == old }.keys.forEach { set(ctx, it, new) }
+    }
+
     fun remove(ctx: Context, widgetId: Int) {
         prefs(ctx).edit().remove("w$widgetId").apply()
         (all(ctx) as MutableStateFlow).value = all(ctx).value - widgetId
