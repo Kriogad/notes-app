@@ -370,5 +370,6 @@ class ReminderReceiver : BroadcastReceiver() {
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         Notes.notes.value.forEach { Reminders.sync(context, it) }
+        Pinned.refresh(context) // после перезагрузки уведомления пропадают
     }
 }

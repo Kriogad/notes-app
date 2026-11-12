@@ -221,6 +221,7 @@ object Notes : NoteStore {
         state.value = sorted
         save(sorted)
         refreshWidgets()
+        Pinned.refresh(app)
         Backup.schedule(app)
     }
 

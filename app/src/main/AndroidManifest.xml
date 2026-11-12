@@ -119,6 +119,10 @@
         </service>
 
         <receiver
+            android:name=".PinReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".ReminderReceiver"
             android:exported="false" />
 

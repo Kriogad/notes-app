@@ -585,12 +585,23 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                     }
                 })
                 Text(if (secret) "Выполнено" else "Выполнено (в архив)")
-                note.remindAt?.let { at ->
+                if (!secret) {
+                    var pinned by remember { mutableStateOf(Pinned.isPinned(ctx, id)) }
+                    TextButton(onClick = {
+                        if (!pinned && store.get(id) == null) store.upsert(note) // новую сначала сохранить
+                        pinned = !pinned
+                        Pinned.set(ctx, id, pinned)
+                        if (pinned) host.askNotificationPermission()
+                    }) { Text(if (pinned) "📌 Открепить" else "📌 В шторку") }
+                }
+            }
+            // Напоминание — отдельной строкой, чтобы всё поместилось на узком экране
+            note.remindAt?.let { at ->
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 16.dp)) {
                     AssistChip(
                         onClick = { target = 0L; pickDate = true },
-                        label = { Text(formatTime(at) + if (note.repeat != Repeat.NONE) " ↻" else "") },
+                        label = { Text(formatTime(at) + if (note.repeat != Repeat.NONE) " · ${note.repeat.label.lowercase()}" else "") },
                         leadingIcon = { Icon(Icons.Filled.Notifications, null) },
-                        modifier = Modifier.padding(start = 12.dp),
                     )
                     IconButton(onClick = { note = note.copy(remindAt = null, repeat = Repeat.NONE) }) {
                         Icon(Icons.Filled.Close, "Убрать напоминание")
