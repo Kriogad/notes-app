@@ -22,6 +22,7 @@ object Shared {
     class Item(val id: String, val text: String, val checked: Boolean, val updated: Long)
 
     private const val PREFS = "shared"
+    private const val DB_URL = "https://notes-shared-6503f-default-rtdb.europe-west1.firebasedatabase.app"
     private val alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789" // без похожих 0/O, 1/I
 
     private lateinit var app: Context
@@ -42,7 +43,8 @@ object Shared {
         // Если Firebase не настроен в сборке — раздел покажет подсказку, краша не будет
         if (FirebaseApp.getApps(app).isEmpty()) return
         db = runCatching {
-            FirebaseDatabase.getInstance().apply { setPersistenceEnabled(true) }
+            // URL явно: в google-services.json его нет, если файл скачан до создания базы
+            FirebaseDatabase.getInstance(DB_URL).apply { setPersistenceEnabled(true) }
         }.getOrNull() ?: return
         loadLocal()
         projectsState.value.forEach { listen(it.code) }
