@@ -3,6 +3,8 @@
 package ru.notes.app
 
 import androidx.activity.compose.BackHandler
+import android.app.Activity
+import android.view.WindowManager
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -134,6 +136,18 @@ fun NotesApp(host: Host, openRequest: Long?, onOpenHandled: () -> Unit) {
     }
 
     val secret = section == Section.Vault
+
+    // Секретный раздел: в списке недавних приложений карточка пустая, скриншоты запрещены
+    val activity = LocalContext.current as? Activity
+    DisposableEffect(activity, secret) {
+        val window = activity?.window
+        if (window != null) {
+            if (secret) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+        onDispose { }
+    }
+
     val id = editing
     when {
         id != null && (!secret || vaultOpen) -> key(id) {
