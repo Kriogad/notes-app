@@ -101,12 +101,17 @@ object WidgetPrefs {
         prefs(ctx).edit().remove("w$widgetId").apply()
         (all(ctx) as MutableStateFlow).value = all(ctx).value - widgetId
     }
+
+    /** Масштаб шрифта виджетов: 0.85 мелкий, 1.0 обычный, 1.25 крупный. */
+    fun fontScale(ctx: Context) = prefs(ctx).getFloat("font_scale", 1f)
+    fun setFontScale(ctx: Context, v: Float) = prefs(ctx).edit().putFloat("font_scale", v).apply()
 }
 
 /** Виджет одной заметки: пункты списка с галочками. */
 class NoteWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val widgetId = GlanceAppWidgetManager(context).getAppWidgetId(id)
+        val scale = WidgetPrefs.fontScale(context)
         provideContent {
             val notes by Notes.notes.collectAsState()
             val links by WidgetPrefs.all(context).collectAsState()
@@ -116,12 +121,12 @@ class NoteWidget : GlanceAppWidget() {
                     .setData(Uri.parse("notes://widget/$widgetId")) // у каждого виджета своя ссылка
                     .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
             )
-            GlanceTheme { Content(noteId, notes.find { it.id == noteId }, pick) }
+            GlanceTheme { Content(noteId, notes.find { it.id == noteId }, pick, scale) }
         }
     }
 
     @Composable
-    private fun Content(noteId: Long?, note: Note?, pick: Action) {
+    private fun Content(noteId: Long?, note: Note?, pick: Action, scale: Float) {
         val onSurface = GlanceTheme.colors.onSurface
         GlanceColumn(
             GlanceModifier.glanceFillMaxSize().appWidgetBackground().cornerRadius(20.dp)
@@ -131,16 +136,16 @@ class NoteWidget : GlanceAppWidget() {
                 GlanceText(
                     if (noteId == null) "Нажмите, чтобы выбрать заметку" else "Заметка удалена. Нажмите, чтобы выбрать другую",
                     GlanceModifier.glanceFillMaxSize().clickable(pick),
-                    TextStyle(onSurface, fontSize = 15.sp),
+                    TextStyle(onSurface, fontSize = (15 * scale).sp),
                 )
             } else {
-                NoteBody(note, pick)
+                NoteBody(note, pick, scale)
             }
         }
     }
 
     @Composable
-    private fun NoteBody(note: Note, pick: Action) {
+    private fun NoteBody(note: Note, pick: Action, scale: Float) {
         val onSurface = GlanceTheme.colors.onSurface
         run {
             val open = actionStartActivity<MainActivity>(actionParametersOf(KeyOpenNote to note.id))
@@ -150,7 +155,7 @@ class NoteWidget : GlanceAppWidget() {
                 GlanceText(
                     note.displayTitle + count,
                     GlanceModifier.defaultWeight().clickable(open),
-                    TextStyle(onSurface, fontSize = 18.sp, fontWeight = FontWeight.Bold),
+                    TextStyle(onSurface, fontSize = (18 * scale).sp, fontWeight = FontWeight.Bold),
                     maxLines = 1,
                 )
                 if (note.items.any { it.checked }) {
@@ -178,7 +183,7 @@ class NoteWidget : GlanceAppWidget() {
             GlanceLazyColumn {
                 if (note.text.isNotBlank()) item(-1L) {
                     GlanceText(note.text, GlanceModifier.glancePadding(vertical = 4.dp).clickable(open),
-                        TextStyle(onSurface, fontSize = 14.sp), maxLines = 6)
+                        TextStyle(onSurface, fontSize = (14 * scale).sp), maxLines = 6)
                 }
                 glanceItems(rows, itemId = { it.index.toLong() }) { (index, item) ->
                     CheckBox(
@@ -188,7 +193,7 @@ class NoteWidget : GlanceAppWidget() {
                         ),
                         text = item.text,
                         style = TextStyle(
-                            onSurface, fontSize = 15.sp,
+                            onSurface, fontSize = (15 * scale).sp,
                             textDecoration = if (item.checked) TextDecoration.LineThrough else TextDecoration.None,
                         ),
                         maxLines = 2,
@@ -197,7 +202,7 @@ class NoteWidget : GlanceAppWidget() {
                 }
                 if (rows.isEmpty() && note.text.isBlank()) item(-2L) {
                     GlanceText("Пусто — нажмите на заголовок, чтобы добавить пункты",
-                        GlanceModifier.clickable(open), TextStyle(onSurface))
+                        GlanceModifier.clickable(open), TextStyle(onSurface, fontSize = (14 * scale).sp))
                 }
             }
         }

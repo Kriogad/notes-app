@@ -45,14 +45,15 @@ private val KeyNew = ActionParameters.Key<Boolean>(EXTRA_NEW)
 
 class NotesWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
+        val scale = WidgetPrefs.fontScale(context)
         provideContent {
             val notes by Notes.notes.collectAsState()
-            GlanceTheme { Content(notes.filter { !it.done }) } // выполненные — в архиве
+            GlanceTheme { Content(notes.filter { !it.done }, scale) } // выполненные — в архиве
         }
     }
 
     @Composable
-    private fun Content(notes: List<Note>) {
+    private fun Content(notes: List<Note>, scale: Float) {
         val onSurface = GlanceTheme.colors.onSurface
         Column(
             GlanceModifier.fillMaxSize().appWidgetBackground().cornerRadius(20.dp)
@@ -62,7 +63,7 @@ class NotesWidget : GlanceAppWidget() {
                 Text(
                     "Заметки",
                     GlanceModifier.defaultWeight().clickable(actionStartActivity<MainActivity>()),
-                    TextStyle(onSurface, fontSize = 18.sp, fontWeight = FontWeight.Bold),
+                    TextStyle(onSurface, fontSize = (18 * scale).sp, fontWeight = FontWeight.Bold),
                 )
                 Image(
                     ImageProvider(R.drawable.ic_mic), "Надиктовать заметку",
@@ -77,7 +78,7 @@ class NotesWidget : GlanceAppWidget() {
                 )
             }
             if (notes.isEmpty()) {
-                Text("Пока пусто — нажмите +", GlanceModifier.padding(top = 8.dp), TextStyle(onSurface))
+                Text("Пока пусто — нажмите +", GlanceModifier.padding(top = 8.dp), TextStyle(onSurface, fontSize = (14 * scale).sp))
             } else {
                 LazyColumn {
                     items(notes, itemId = { it.id }) { note ->
@@ -93,7 +94,7 @@ class NotesWidget : GlanceAppWidget() {
                                 GlanceModifier.defaultWeight().padding(vertical = 6.dp)
                                     .clickable(actionStartActivity<MainActivity>(actionParametersOf(KeyOpen to note.id))),
                                 TextStyle(
-                                    onSurface, fontSize = 15.sp,
+                                    onSurface, fontSize = (15 * scale).sp,
                                     textDecoration = if (note.done) TextDecoration.LineThrough else TextDecoration.None,
                                 ),
                                 maxLines = 2,

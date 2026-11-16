@@ -534,6 +534,27 @@ fun SettingsScreen(host: Host, onBack: () -> Unit) {
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
+            Text("Шрифт виджетов", style = MaterialTheme.typography.titleMedium)
+            var fontScale by remember { mutableStateOf(WidgetPrefs.fontScale(ctx)) }
+            var fontMenu by remember { mutableStateOf(false) }
+            val fontOptions = listOf(0.85f to "Мелкий", 1.0f to "Обычный", 1.25f to "Крупный")
+            Box {
+                OutlinedButton(onClick = { fontMenu = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(fontOptions.firstOrNull { it.first == fontScale }?.second ?: "Обычный")
+                }
+                DropdownMenu(expanded = fontMenu, onDismissRequest = { fontMenu = false }) {
+                    fontOptions.forEach { (v, label) ->
+                        DropdownMenuItem(text = { Text(label) }, onClick = {
+                            fontScale = v
+                            WidgetPrefs.setFontScale(ctx, v)
+                            Notes.refreshWidgets()
+                            fontMenu = false
+                        })
+                    }
+                }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
             RemindSettings(host)
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
