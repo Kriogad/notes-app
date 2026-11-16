@@ -32,6 +32,7 @@ const val EXTRA_NEW = "new_note"
 const val EXTRA_ACK = "ack"
 const val EXTRA_ITEM = "item"
 const val EXTRA_VOICE_TO = "voice_to"
+const val EXTRA_ID = "id"
 
 enum class Repeat(val key: String, val label: String) {
     NONE("", "Не повторять"),
@@ -72,7 +73,6 @@ object Reminders {
     private const val ACTION_DONE = "ru.notes.app.DONE"
     private const val ACTION_SNOOZE_10 = "ru.notes.app.SNOOZE10"
     private const val ACTION_SNOOZE_60 = "ru.notes.app.SNOOZE60"
-    private const val EXTRA_ID = "id"
     private const val TEST_ID = 1
     private const val QUIET = "remind_quiet"
     private const val ACTION_STOP = "ru.notes.app.STOP"
