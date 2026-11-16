@@ -430,6 +430,10 @@ fun NoteCard(
                         }
                     }
                 }
+                if (isVault && note.category.isNotBlank()) {
+                    Text("🏷 ${note.category}", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline)
+                }
                 if (note.title.isNotBlank() && note.text.isNotBlank()) {
                     Text(
                         if (isVault && !revealed) "••••••••" else note.text,
@@ -643,6 +647,47 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                 .verticalScroll(rememberScrollState()).padding(horizontal = 4.dp)
         ) {
             PlainField(note.title, { note = note.copy(title = it) }, "Заголовок", MaterialTheme.typography.titleLarge)
+
+            // Категория — только у секретных заметок («Пароли», «Контакты»…)
+            if (secret) {
+                var catDialog by remember { mutableStateOf(false) }
+                Row(Modifier.padding(horizontal = 4.dp)) {
+                    AssistChip(
+                        onClick = { catDialog = true },
+                        label = { Text(if (note.category.isBlank()) "🏷 Категория…" else "🏷 ${note.category}") },
+                    )
+                }
+                if (catDialog) {
+                    val cats = store.notes.collectAsState().value.map { it.category }.filter { it.isNotBlank() }.distinct()
+                    var newCat by remember { mutableStateOf(note.category) }
+                    AlertDialog(
+                        onDismissRequest = { catDialog = false },
+                        title = { Text("Категория заметки") },
+                        text = {
+                            Column {
+                                OutlinedTextField(newCat, { newCat = it }, label = { Text("Название") },
+                                    singleLine = true, modifier = Modifier.fillMaxWidth())
+                                if (cats.isNotEmpty()) {
+                                    Text("Существующие:", style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                                    cats.chunked(3).forEach { row ->
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            row.forEach { c -> TextButton(onClick = { newCat = c }) { Text(c, maxLines = 1) } }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { note = note.copy(category = newCat.trim()); catDialog = false }) { Text("Готово") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { note = note.copy(category = ""); catDialog = false }) { Text("Без категории") }
+                        },
+                    )
+                }
+            }
 
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
                 Checkbox(note.done, { checked ->

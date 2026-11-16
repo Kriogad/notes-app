@@ -54,6 +54,8 @@ data class Note(
     val pos: Double? = null,
     /** Показание счётчика (для повторяющихся заметок). */
     val reading: Double? = null,
+    /** Категория (в секретном разделе: «Пароли», «Контакты»…). Пусто — без категории. */
+    val category: String = "",
 ) {
     val seriesId get() = if (series == 0L) id else series
 
@@ -271,6 +273,7 @@ object Notes : NoteStore {
         .apply { if (n.due) put("due", true) }
         .apply { n.pos?.let { put("pos", it) } }
         .apply { n.reading?.let { put("rd", it) } }
+        .apply { if (n.category.isNotBlank()) put("cat", n.category) }
         .apply {
             if (n.attachments.isNotEmpty()) put("att", JSONArray().apply {
                 n.attachments.forEach { put(JSONObject().put("f", it.file).put("n", it.name).put("m", it.mime)) }
@@ -303,6 +306,7 @@ object Notes : NoteStore {
         due = o.optBoolean("due"),
         pos = if (o.has("pos")) o.getDouble("pos") else null,
         reading = if (o.has("rd")) o.getDouble("rd") else null,
+        category = o.optString("cat"),
         attachments = o.optJSONArray("att")?.let { a ->
             List(a.length()) { i -> a.getJSONObject(i).let { Attachment(it.getString("f"), it.optString("n"), it.optString("m")) } }
         } ?: emptyList(),

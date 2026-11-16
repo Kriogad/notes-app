@@ -35,6 +35,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
@@ -45,6 +46,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -323,37 +325,64 @@ private fun VaultList(host: Host, onOpen: (Long) -> Unit) {
     val ctx = LocalContext.current
     val notes by Vault.notes.collectAsState()
     var bio by remember { mutableStateOf(Vault.bioEnabled) }
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 88.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (Build.VERSION.SDK_INT >= 30 && host.bioAvailable()) item {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
-                Text("Вход по отпечатку", Modifier.weight(1f))
-                Switch(checked = bio, onCheckedChange = { on ->
-                    if (on) {
-                        try {
-                            host.biometric(Vault.bioEncryptCipher(), "Включить вход по отпечатку") { c ->
-                                Vault.bioSave(c); bio = true
-                            }
-                        } catch (e: Exception) {
-                            Toast.makeText(ctx, "Сначала добавьте отпечаток в настройках телефона", Toast.LENGTH_LONG).show()
-                        }
-                    } else {
-                        Vault.disableBio(); bio = false
-                    }
-                })
+    // Фильтр по категориям: null — все, "" — без категории
+    var filter by remember { mutableStateOf<String?>(null) }
+    val cats = notes.map { it.category }.filter { it.isNotBlank() }.distinct()
+    val hasUncat = notes.any { it.category.isBlank() }
+    val shown = when (filter) {
+        null -> notes
+        else -> notes.filter { it.category == filter }
+    }
+    Column {
+        if (cats.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(selected = filter == null, onClick = { filter = null }, label = { Text("Все") })
+                cats.forEach { c ->
+                    FilterChip(selected = filter == c, onClick = { filter = c }, label = { Text(c, maxLines = 1) })
+                }
+                if (hasUncat) FilterChip(
+                    selected = filter == "", onClick = { filter = "" },
+                    label = { Text("Без категории") },
+                )
             }
         }
-        if (notes.isEmpty()) item {
-            Text(
-                "Здесь пока пусто. Нажмите +, чтобы добавить пароль или другую секретную заметку.",
-                color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
-            )
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 88.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (Build.VERSION.SDK_INT >= 30 && host.bioAvailable()) item {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
+                    Text("Вход по отпечатку", Modifier.weight(1f))
+                    Switch(checked = bio, onCheckedChange = { on ->
+                        if (on) {
+                            try {
+                                host.biometric(Vault.bioEncryptCipher(), "Включить вход по отпечатку") { c ->
+                                    Vault.bioSave(c); bio = true
+                                }
+                            } catch (e: Exception) {
+                                Toast.makeText(ctx, "Сначала добавьте отпечаток в настройках телефона", Toast.LENGTH_LONG).show()
+                            }
+                        } else {
+                            Vault.disableBio(); bio = false
+                        }
+                    })
+                }
+            }
+            if (shown.isEmpty()) item {
+                Text(
+                    if (notes.isEmpty()) "Здесь пока пусто. Нажмите +, чтобы добавить пароль или другую секретную заметку."
+                    else "В этой категории пусто.",
+                    color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+                )
+            }
+            items(shown, key = { it.id }) { n -> NoteCard(n, Vault, Modifier.animateItem()) { onOpen(n.id) } }
         }
-        items(notes, key = { it.id }) { n -> NoteCard(n, Vault, Modifier.animateItem()) { onOpen(n.id) } }
     }
 }
 
