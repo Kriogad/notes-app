@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -22,15 +25,21 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,6 +52,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -53,7 +64,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -69,11 +87,15 @@ import kotlinx.coroutines.launch
 @Composable
 fun VaultScreen(host: Host, onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: () -> Unit) {
     val unlocked by Vault.unlocked.collectAsState()
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var tab by rememberSaveable { mutableStateOf(0) } // 0 — заметки, 1 — фото
+    var importing by remember { mutableStateOf(false) }
     BackHandler(onBack = onBack)
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Секретные заметки") },
+                title = { Text("Секретный раздел") },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") } },
                 actions = {
                     if (unlocked) IconButton(onClick = onBack) { Icon(Icons.Filled.Lock, "Закрыть раздел") }
@@ -81,16 +103,107 @@ fun VaultScreen(host: Host, onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: (
             )
         },
         floatingActionButton = {
-            if (unlocked) FloatingActionButton(onClick = onNew) { Icon(Icons.Filled.Add, "Новая секретная заметка") }
+            if (unlocked) FloatingActionButton(onClick = {
+                if (tab == 0) onNew()
+                else host.pickPhotos { uris ->
+                    scope.launch {
+                        importing = true
+                        val n = Vault.importPhotos(ctx, uris)
+                        importing = false
+                        if (n < uris.size) Toast.makeText(ctx, "Не все фото удалось добавить", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }) { Icon(Icons.Filled.Add, if (tab == 0) "Новая секретная заметка" else "Добавить фото") }
         },
     ) { pad ->
-        Box(Modifier.fillMaxSize().padding(pad).imePadding()) {
-            when {
-                unlocked -> VaultList(host, onOpen)
-                !Vault.exists -> CreateVault()
-                else -> UnlockVault(host)
+        Column(Modifier.fillMaxSize().padding(pad).imePadding()) {
+            if (unlocked) {
+                TabRow(selectedTabIndex = tab) {
+                    Tab(selected = tab == 0, onClick = { tab = 0 }) { Text("Заметки", Modifier.padding(14.dp)) }
+                    Tab(selected = tab == 1, onClick = { tab = 1 }) { Text("Фото", Modifier.padding(14.dp)) }
+                }
+            }
+            Box(Modifier.fillMaxSize()) {
+                when {
+                    !unlocked -> if (!Vault.exists) CreateVault() else UnlockVault(host)
+                    tab == 0 -> VaultList(host, onOpen)
+                    else -> VaultPhotos()
+                }
+                if (importing) Text(
+                    "Шифрую фото…", color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(8.dp),
+                )
             }
         }
+    }
+}
+
+// ---------------- Секретные фото ----------------
+
+@Composable
+private fun VaultPhotos() {
+    val ctx = LocalContext.current
+    val photos by Vault.photos.collectAsState()
+    var viewing by remember { mutableStateOf<Vault.VaultPhoto?>(null) }
+    var askDelete by remember { mutableStateOf<Vault.VaultPhoto?>(null) }
+
+    if (photos.isEmpty()) {
+        Text(
+            "Здесь пока пусто. Нажмите +, чтобы добавить фото — они шифруются и не видны в галерее телефона.",
+            color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(32.dp),
+        )
+    }
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(3),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 88.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        gridItems(photos, key = { it.file }) { p ->
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Thumb(Attachment(p.file, "фото", "image/*"), 110.dp) { viewing = p }
+            }
+        }
+    }
+
+    // Просмотр на весь экран
+    viewing?.let { p ->
+        Dialog(
+            onDismissRequest = { viewing = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            Box(Modifier.fillMaxSize().background(Color.Black)) {
+                val bmp by produceState<ImageBitmap?>(null, p.file) {
+                    value = withContext(Dispatchers.IO) {
+                        Vault.decrypt(File(Attachments.dir(ctx), p.file))
+                            ?.let { Images.decode(it, 2000)?.asImageBitmap() }
+                    }
+                }
+                bmp?.let { Image(it, "Секретное фото", Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
+                Row(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                    IconButton(onClick = { askDelete = p; viewing = null }) {
+                        Icon(Icons.Filled.Delete, "Удалить", tint = Color.White)
+                    }
+                    IconButton(onClick = { viewing = null }) {
+                        Icon(Icons.Filled.Close, "Закрыть", tint = Color.White)
+                    }
+                }
+            }
+        }
+    }
+
+    askDelete?.let { p ->
+        AlertDialog(
+            onDismissRequest = { askDelete = null },
+            title = { Text("Удалить фото?") },
+            text = { Text("Восстановить будет нельзя.") },
+            confirmButton = {
+                TextButton(onClick = { Vault.deletePhoto(ctx, p); askDelete = null }) { Text("Удалить") }
+            },
+            dismissButton = { TextButton(onClick = { askDelete = null }) { Text("Отмена") } },
+        )
     }
 }
 

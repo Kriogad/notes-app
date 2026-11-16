@@ -44,6 +44,46 @@ object Vault : NoteStore {
     override val notes: StateFlow<List<Note>> = state
     val unlocked = MutableStateFlow(false)
 
+    /** Секретное фото: зашифрованный файл в папке вложений. */
+    class VaultPhoto(val file: String, val added: Long)
+    private val photosState = MutableStateFlow<List<VaultPhoto>>(emptyList())
+    val photos: StateFlow<List<VaultPhoto>> = photosState
+
+    /** Список фото хранится внутри зашифрованного файла рядом с заметками. */
+    private fun photosJson() = JSONArray().apply {
+        photosState.value.forEach { p -> put(JSONObject().put("file", p.file).put("added", p.added)) }
+    }
+
+    private fun parsePhotos(o: JSONObject) {
+        val arr = o.optJSONArray("photos") ?: JSONArray()
+        photosState.value = List(arr.length()) {
+            val p = arr.getJSONObject(it)
+            VaultPhoto(p.getString("file"), p.optLong("added"))
+        }
+    }
+
+    /** Шифрует выбранные фото ключом раздела. Сколько удалось добавить. */
+    suspend fun importPhotos(ctx: Context, uris: List<android.net.Uri>): Int = withContext(Dispatchers.IO) {
+        if (key == null) return@withContext 0
+        var added = 0
+        for (u in uris) {
+            val f = File(Attachments.dir(ctx), "${java.util.UUID.randomUUID().toString().take(12)}.enc")
+            val ok = ctx.contentResolver.openInputStream(u)?.use { encryptTo(it, f) } == true
+            if (ok) {
+                photosState.value = photosState.value + VaultPhoto(f.name, System.currentTimeMillis())
+                added++
+            } else f.delete()
+        }
+        if (added > 0) commit(state.value)
+        added
+    }
+
+    fun deletePhoto(ctx: Context, p: VaultPhoto) {
+        File(Attachments.dir(ctx), p.file).delete()
+        photosState.value = photosState.value.filter { it.file != p.file }
+        commit(state.value)
+    }
+
     fun init(context: Context) { app = context.applicationContext }
 
     val exists get() = file.exists()
@@ -58,6 +98,7 @@ object Vault : NoteStore {
         key = k
         write(emptyList(), salt, hint)
         state.value = emptyList()
+        photosState.value = emptyList()
         unlocked.value = true
     }
 
@@ -71,6 +112,7 @@ object Vault : NoteStore {
         key = null
         Attachments.clearViews(app)
         state.value = emptyList()
+        photosState.value = emptyList()
         unlocked.value = false
     }
 
@@ -86,6 +128,7 @@ object Vault : NoteStore {
         c.init(Cipher.DECRYPT_MODE, k, GCMParameterSpec(128, b64(o.getString("iv"))))
         val arr = JSONArray(String(c.doFinal(b64(o.getString("data")))))
         state.value = List(arr.length()) { Notes.fromJson(arr.getJSONObject(it)) }.sortedByDescending { it.updated }
+        parsePhotos(o)
         key = k
         unlocked.value = true
         true
@@ -197,7 +240,7 @@ object Vault : NoteStore {
         c.init(Cipher.ENCRYPT_MODE, key)
         val data = c.doFinal(arr.toString().toByteArray())
         val o = JSONObject().put("v", 1).put("salt", b64(salt)).put("iv", b64(c.iv))
-            .put("data", b64(data)).put("hint", hint)
+            .put("data", b64(data)).put("hint", hint).put("photos", photosJson())
         val tmp = File(file.path + ".tmp")
         tmp.writeText(o.toString())
         tmp.renameTo(file)
