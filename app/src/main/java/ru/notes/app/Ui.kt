@@ -404,17 +404,31 @@ fun NoteCard(
     fun toggle(item: CheckItem) = store.upsert(
         note.copy(items = note.items.map { if (it.id == item.id) it.copy(checked = !it.checked) else it })
     )
+    // В секретном разделе пункты (пароли) скрыты за точками; глаз — подглядеть
+    val isVault = store === Vault
+    var revealed by remember(note.id) { mutableStateOf(false) }
     Card(onClick = onClick, modifier = modifier.fillMaxWidth()) {
         Row(Modifier.padding(end = 12.dp, top = 4.dp, bottom = 8.dp)) {
             Checkbox(checked = note.done, onCheckedChange = { store.setDone(note.id, it) })
             Column(Modifier.weight(1f).padding(top = 12.dp).alpha(if (note.done) 0.6f else 1f)) {
-                Text(
-                    note.displayTitle,
-                    style = MaterialTheme.typography.titleMedium.strike(note.done),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        note.displayTitle,
+                        style = MaterialTheme.typography.titleMedium.strike(note.done),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (isVault && (note.items.isNotEmpty() || note.text.isNotBlank())) {
+                        IconButton(onClick = { revealed = !revealed }) {
+                            Text(if (revealed) "🙈" else "👁")
+                        }
+                    }
+                }
                 if (note.title.isNotBlank() && note.text.isNotBlank()) {
-                    Text(note.text, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        if (isVault && !revealed) "••••••••" else note.text,
+                        style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 // Невыполненные пункты первыми — их важнее видеть.
                 // Не влезли — прокрутка внутри карточки, полоса прокрутки справа.
@@ -433,7 +447,8 @@ fun NoteCard(
                         ) {
                             items.forEach { item ->
                                 Text(
-                                    (if (item.checked) "☑ " else "☐ ") + item.text +
+                                    (if (item.checked) "☑ " else "☐ ") +
+                                        (if (isVault && !revealed) "••••••••" else item.text) +
                                         (item.remindAt?.let { r -> "  🔔 " + formatTime(r) } ?: ""),
                                     style = MaterialTheme.typography.bodyMedium.strike(item.checked),
                                     maxLines = 1, overflow = TextOverflow.Ellipsis,
