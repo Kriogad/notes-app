@@ -34,6 +34,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
@@ -561,8 +562,18 @@ fun SettingsScreen(host: Host, onBack: () -> Unit) {
                 }
             }
             if (status.isNotBlank()) Text(status, color = MaterialTheme.colorScheme.outline)
-            Text("Версия $version", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.padding(top = 24.dp))
+            Column(Modifier.padding(top = 24.dp)) {
+                Text("Версия $version", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                Text(
+                    "Разработчик: Kriogad",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 2.dp).clickable {
+                        ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://github.com/Kriogad")))
+                    },
+                )
+            }
         }
     }
 
