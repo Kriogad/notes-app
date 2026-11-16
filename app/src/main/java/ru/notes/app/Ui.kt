@@ -167,7 +167,12 @@ fun NotesApp(host: Host, openRequest: Long?, onOpenHandled: () -> Unit) {
             host,
             onBack = { Vault.lock(); section = Section.Main },
             onOpen = { editing = it },
-            onNew = { editing = System.currentTimeMillis() },
+            onNew = { cat ->
+                val nid = System.currentTimeMillis()
+                // Заметка создаётся сразу в выбранной категории; если останется пустой — удалится
+                if (cat.isNotEmpty() && cat != "*") Vault.upsert(Note(nid, category = cat))
+                editing = nid
+            },
         )
         else -> ListScreen(
             notes, host,

@@ -35,7 +35,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
@@ -44,6 +46,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.FilterChip
@@ -81,6 +84,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.pm.PackageInfoCompat
 import kotlinx.coroutines.launch
@@ -88,12 +92,14 @@ import kotlinx.coroutines.launch
 // ---------------- Секретный раздел ----------------
 
 @Composable
-fun VaultScreen(host: Host, onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: () -> Unit) {
+fun VaultScreen(host: Host, onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: (String) -> Unit) {
     val unlocked by Vault.unlocked.collectAsState()
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var tab by rememberSaveable { mutableStateOf(0) } // 0 — заметки, 1 — фото
+    var cat by remember { mutableStateOf<String?>(null) } // null — список категорий, "*" — все заметки
     var importing by remember { mutableStateOf(false) }
+    var askNewCat by remember { mutableStateOf(false) }
     BackHandler(onBack = onBack)
     Scaffold(
         topBar = {
@@ -110,8 +116,18 @@ fun VaultScreen(host: Host, onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: (
                 var addMenu by remember { mutableStateOf(false) }
                 Box {
                     FloatingActionButton(onClick = {
-                        if (tab == 0) onNew() else addMenu = true
-                    }) { Icon(Icons.Filled.Add, if (tab == 0) "Новая секретная заметка" else "Добавить фото") }
+                        when {
+                            tab == 1 -> addMenu = true
+                            cat == null -> askNewCat = true
+                            else -> onNew(cat!!)
+                        }
+                    }) {
+                        Icon(Icons.Filled.Add, when {
+                            tab == 1 -> "Добавить фото"
+                            cat == null -> "Новая категория"
+                            else -> "Новая секретная заметка"
+                        })
+                    }
                     DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
                         DropdownMenuItem(text = { Text("Снять фото") }, onClick = {
                             addMenu = false
@@ -153,14 +169,155 @@ fun VaultScreen(host: Host, onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: (
             Box(Modifier.fillMaxSize()) {
                 when {
                     !unlocked -> if (!Vault.exists) CreateVault() else UnlockVault(host)
-                    tab == 0 -> VaultList(host, onOpen)
-                    else -> VaultPhotos()
+                    tab == 1 -> VaultPhotos()
+                    cat != null -> VaultList(host, cat!!, onBackToCats = { cat = null }, onOpen)
+                    else -> VaultCategories(host, onPick = { cat = it })
                 }
                 if (importing) Text(
                     "Шифрую фото…", color = MaterialTheme.colorScheme.outline,
                     modifier = Modifier.align(Alignment.TopCenter).padding(8.dp),
                 )
             }
+        }
+    }
+
+    if (askNewCat) {
+        var name by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { askNewCat = false },
+            title = { Text("Новая категория") },
+            text = {
+                OutlinedTextField(name, { name = it }, label = { Text("Название: Пароли, Сайты…") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth())
+            },
+            confirmButton = {
+                TextButton(enabled = name.isNotBlank(), onClick = {
+                    Vault.addCategory(name)
+                    askNewCat = false
+                }) { Text("Создать") }
+            },
+            dismissButton = { TextButton(onClick = { askNewCat = false }) { Text("Отмена") } },
+        )
+    }
+}
+
+// ---------------- Категории сейфа ----------------
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun VaultCategories(host: Host, onPick: (String) -> Unit) {
+    val ctx = LocalContext.current
+    val notes by Vault.notes.collectAsState()
+    val cats by Vault.categories.collectAsState()
+    var bio by remember { mutableStateOf(Vault.bioEnabled) }
+    var manage by remember { mutableStateOf<String?>(null) } // категория под меню
+    var renameCat by remember { mutableStateOf<String?>(null) }
+    var deleteCat by remember { mutableStateOf<String?>(null) }
+
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 88.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (Build.VERSION.SDK_INT >= 30 && host.bioAvailable()) item {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
+                Text("Вход по отпечатку", Modifier.weight(1f))
+                Switch(checked = bio, onCheckedChange = { on ->
+                    if (on) {
+                        try {
+                            host.biometric(Vault.bioEncryptCipher(), "Включить вход по отпечатку") { c ->
+                                Vault.bioSave(c); bio = true
+                            }
+                        } catch (e: Exception) {
+                            Toast.makeText(ctx, "Сначала добавьте отпечаток в настройках телефона", Toast.LENGTH_LONG).show()
+                        }
+                    } else {
+                        Vault.disableBio(); bio = false
+                    }
+                })
+            }
+        }
+        item {
+            CategoryCard("📒 Все заметки", notes.size, onClick = { onPick("*") })
+        }
+        items(cats, key = { it }) { c ->
+            CategoryCard(
+                "🗂 $c", notes.count { it.category == c },
+                onLongClick = { manage = c },
+                onClick = { onPick(c) },
+            )
+        }
+        if (notes.any { it.category.isBlank() }) item {
+            CategoryCard("📄 Без категории", notes.count { it.category.isBlank() }, onClick = { onPick("") })
+        }
+        item {
+            Text(
+                "Кнопка + создаёт категорию. Долгий тап по категории — переименовать или удалить.",
+                color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+            )
+        }
+    }
+
+    manage?.let { c ->
+        AlertDialog(
+            onDismissRequest = { manage = null },
+            title = { Text(c) },
+            text = { Text("Заметок: ${notes.count { it.category == c }}") },
+            confirmButton = { TextButton(onClick = { renameCat = c; manage = null }) { Text("Переименовать") } },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { deleteCat = c; manage = null }) {
+                        Text("Удалить", color = MaterialTheme.colorScheme.error)
+                    }
+                    TextButton(onClick = { manage = null }) { Text("Отмена") }
+                }
+            },
+        )
+    }
+
+    renameCat?.let { c ->
+        var name by remember { mutableStateOf(c) }
+        AlertDialog(
+            onDismissRequest = { renameCat = null },
+            title = { Text("Переименовать категорию") },
+            text = {
+                OutlinedTextField(name, { name = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            },
+            confirmButton = {
+                TextButton(enabled = name.isNotBlank(), onClick = {
+                    Vault.renameCategory(c, name); renameCat = null
+                }) { Text("Готово") }
+            },
+            dismissButton = { TextButton(onClick = { renameCat = null }) { Text("Отмена") } },
+        )
+    }
+
+    deleteCat?.let { c ->
+        AlertDialog(
+            onDismissRequest = { deleteCat = null },
+            title = { Text("Удалить категорию «$c»?") },
+            text = { Text("Сами заметки останутся — перейдут в «Без категории».") },
+            confirmButton = {
+                TextButton(onClick = { Vault.deleteCategory(c); deleteCat = null }) {
+                    Text("Удалить", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { deleteCat = null }) { Text("Отмена") } },
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun CategoryCard(title: String, count: Int, onLongClick: (() -> Unit)? = null, onClick: () -> Unit) {
+    Card(
+        Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("$count", color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -321,62 +478,34 @@ private fun UnlockVault(host: Host) {
 }
 
 @Composable
-private fun VaultList(host: Host, onOpen: (Long) -> Unit) {
-    val ctx = LocalContext.current
+private fun VaultList(host: Host, cat: String, onBackToCats: () -> Unit, onOpen: (Long) -> Unit) {
     val notes by Vault.notes.collectAsState()
-    var bio by remember { mutableStateOf(Vault.bioEnabled) }
-    // Фильтр по категориям: null — все, "" — без категории
-    var filter by remember { mutableStateOf<String?>(null) }
-    val cats = notes.map { it.category }.filter { it.isNotBlank() }.distinct()
-    val hasUncat = notes.any { it.category.isBlank() }
-    val shown = when (filter) {
-        null -> notes
-        else -> notes.filter { it.category == filter }
+    val shown = when (cat) {
+        "*" -> notes
+        "" -> notes.filter { it.category.isBlank() }
+        else -> notes.filter { it.category == cat }
     }
     Column {
-        if (cats.isNotEmpty()) {
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                FilterChip(selected = filter == null, onClick = { filter = null }, label = { Text("Все") })
-                cats.forEach { c ->
-                    FilterChip(selected = filter == c, onClick = { filter = c }, label = { Text(c, maxLines = 1) })
-                }
-                if (hasUncat) FilterChip(
-                    selected = filter == "", onClick = { filter = "" },
-                    label = { Text("Без категории") },
-                )
-            }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onBackToCats) { Text("← Категории") }
+            Text(
+                when (cat) {
+                    "*" -> "Все заметки"
+                    "" -> "Без категории"
+                    else -> cat
+                },
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
         }
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 88.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (Build.VERSION.SDK_INT >= 30 && host.bioAvailable()) item {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
-                    Text("Вход по отпечатку", Modifier.weight(1f))
-                    Switch(checked = bio, onCheckedChange = { on ->
-                        if (on) {
-                            try {
-                                host.biometric(Vault.bioEncryptCipher(), "Включить вход по отпечатку") { c ->
-                                    Vault.bioSave(c); bio = true
-                                }
-                            } catch (e: Exception) {
-                                Toast.makeText(ctx, "Сначала добавьте отпечаток в настройках телефона", Toast.LENGTH_LONG).show()
-                            }
-                        } else {
-                            Vault.disableBio(); bio = false
-                        }
-                    })
-                }
-            }
             if (shown.isEmpty()) item {
                 Text(
-                    if (notes.isEmpty()) "Здесь пока пусто. Нажмите +, чтобы добавить пароль или другую секретную заметку."
-                    else "В этой категории пусто.",
+                    "Здесь пока пусто. Нажмите +, чтобы добавить заметку в эту категорию.",
                     color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
                 )

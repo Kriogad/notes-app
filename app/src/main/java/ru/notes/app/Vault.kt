@@ -84,7 +84,45 @@ object Vault : NoteStore {
         commit(state.value)
     }
 
-    fun init(context: Context) { app = context.applicationContext }
+    fun init(context: Context) {
+        app = context.applicationContext
+        catsState.value = loadCats()
+    }
+
+    // ---------- категории ----------
+
+    private val catsState = MutableStateFlow<List<String>>(emptyList())
+    /** Категории: созданные явно + те, что есть у заметок. */
+    val categories: StateFlow<List<String>> = catsState
+
+    private fun loadCats(): List<String> {
+        val saved = JSONArray(prefs.getString("cats", "[]"))
+        val fromNotes = state.value.map { it.category }.filter { it.isNotBlank() }
+        return (List(saved.length()) { saved.getString(it) } + fromNotes).distinct()
+    }
+
+    private fun saveCats(list: List<String>) {
+        prefs.edit().putString("cats", JSONArray().apply { list.forEach { put(it) } }.toString()).apply()
+        catsState.value = list
+    }
+
+    fun addCategory(name: String) {
+        val n = name.trim()
+        if (n.isNotEmpty() && n !in catsState.value) saveCats(catsState.value + n)
+    }
+
+    fun renameCategory(old: String, new: String) {
+        val n = new.trim()
+        if (n.isEmpty() || n == old) return
+        state.value.filter { it.category == old }.forEach { upsert(it.copy(category = n)) }
+        saveCats(catsState.value.map { if (it == old) n else it }.distinct())
+    }
+
+    /** Заметки из категории уходят в «без категории». */
+    fun deleteCategory(name: String) {
+        state.value.filter { it.category == name }.forEach { upsert(it.copy(category = "")) }
+        saveCats(catsState.value - name)
+    }
 
     val exists get() = file.exists()
     val hint: String get() = runCatching { JSONObject(file.readText()).optString("hint") }.getOrDefault("")
@@ -231,6 +269,7 @@ object Vault : NoteStore {
         val o = JSONObject(file.readText())
         write(list, b64(o.getString("salt")), o.optString("hint"))
         state.value = list.sortedByDescending { it.updated }
+        catsState.value = loadCats() // подхватить категории, появившиеся из редактора
         Backup.schedule(app)
     }
 
