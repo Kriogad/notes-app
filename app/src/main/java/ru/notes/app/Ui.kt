@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -99,6 +101,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.style.TextAlign
@@ -410,19 +415,46 @@ fun NoteCard(
                 if (note.title.isNotBlank() && note.text.isNotBlank()) {
                     Text(note.text, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
-                // Невыполненные пункты первыми — их важнее видеть
-                note.items.sortedBy { it.checked }.take(maxItems).forEach {
-                    val item = it
-                    Text(
-                        (if (it.checked) "☑ " else "☐ ") + it.text +
-                            (it.remindAt?.let { r -> "  🔔 " + formatTime(r) } ?: ""),
-                        style = MaterialTheme.typography.bodyMedium.strike(it.checked),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.fillMaxWidth().clickable { toggle(item) }.padding(vertical = 3.dp),
-                    )
-                }
-                if (note.items.size > maxItems) {
-                    Text("… ещё ${note.items.size - maxItems}", style = MaterialTheme.typography.bodySmall)
+                // Невыполненные пункты первыми — их важнее видеть.
+                // Не влезли — прокрутка внутри карточки, полоса прокрутки справа.
+                val items = note.items.sortedBy { it.checked }
+                if (items.isNotEmpty()) {
+                    val scroll = rememberScrollState()
+                    val density = LocalDensity.current
+                    var boxH by remember { mutableStateOf(0) }
+                    Box(
+                        Modifier.fillMaxWidth().heightIn(max = 26.dp * maxItems)
+                            .onGloballyPositioned { boxH = it.size.height }
+                    ) {
+                        Column(
+                            Modifier.fillMaxWidth().verticalScroll(scroll)
+                                .padding(end = if (scroll.maxValue > 0) 10.dp else 0.dp)
+                        ) {
+                            items.forEach { item ->
+                                Text(
+                                    (if (item.checked) "☑ " else "☐ ") + item.text +
+                                        (item.remindAt?.let { r -> "  🔔 " + formatTime(r) } ?: ""),
+                                    style = MaterialTheme.typography.bodyMedium.strike(item.checked),
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.fillMaxWidth().clickable { toggle(item) }.padding(vertical = 3.dp),
+                                )
+                            }
+                        }
+                        if (scroll.maxValue > 0 && boxH > 0) {
+                            val totalPx = (scroll.maxValue + boxH).toFloat()
+                            val minThumb = with(density) { 18.dp.toPx() }
+                            val thumbH = maxOf(boxH.toFloat() * boxH / totalPx, minThumb)
+                            val thumbTop = (boxH - thumbH) * scroll.value / scroll.maxValue
+                            Box(
+                                Modifier.align(Alignment.TopEnd)
+                                    .padding(top = with(density) { thumbTop.toDp() })
+                                    .width(3.dp)
+                                    .height(with(density) { thumbH.toDp() })
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(MaterialTheme.colorScheme.outline)
+                            )
+                        }
+                    }
                 }
                 if (note.attachments.isNotEmpty()) {
                     Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp),
