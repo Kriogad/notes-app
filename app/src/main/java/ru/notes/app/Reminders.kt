@@ -340,10 +340,10 @@ object Reminders {
         setPending(ctx, k, true)
         val nag = nagMinutes(ctx)
         if (nag > 0) alarm(ctx, ACTION_NAG, note.id, r.item, System.currentTimeMillis() + nag * 60_000L)
-        // Телефон разблокирован: система покажет только плашку сверху, а мы хотим большое окно.
-        // Запустить его сразу можно, если дано разрешение «поверх других приложений».
-        val locked = ctx.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked != false
-        if (!locked && android.provider.Settings.canDrawOverlays(ctx)) {
+        // Разрешение «поверх других приложений» позволяет показать большое окно сразу —
+        // и на разблокированном телефоне, и поверх блокировки (на Android 14+ система
+        // часто не даёт полноэкранных уведомлений).
+        if (android.provider.Settings.canDrawOverlays(ctx)) {
             runCatching {
                 ctx.startActivity(
                     Intent(ctx, RingActivity::class.java).setData(Uri.parse("notes://ring/$k"))

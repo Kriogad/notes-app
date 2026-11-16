@@ -277,8 +277,8 @@ private fun RemindSettings(host: Host) {
         Column(Modifier.weight(1f)) {
             Text("Большое окно на весь экран")
             Text(
-                if (overlay) "Разрешено: окно вылетает и на разблокированном телефоне"
-                else "Чтобы окно вылетало на разблокированном телефоне, разрешите «поверх других приложений»",
+                if (overlay) "Разрешено: окно вылетает и поверх блокировки, и на разблокированном телефоне"
+                else "Разрешите «поверх других приложений» — тогда окно вылетает поверх любого экрана",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline,
             )
@@ -296,6 +296,37 @@ private fun RemindSettings(host: Host) {
                 }
             },
         )
+    }
+    if (Build.VERSION.SDK_INT >= 34) {
+        // Android 14+: полноэкранные уведомления выдаются вручную (на случай, если «поверх приложений» нельзя)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val nm = ctx.getSystemService(android.app.NotificationManager::class.java)
+            var fsi by remember { mutableStateOf(nm?.canUseFullScreenIntent() == true) }
+            LaunchedEffect(Unit) {
+                while (true) { fsi = nm?.canUseFullScreenIntent() == true; kotlinx.coroutines.delay(1000) }
+            }
+            Column(Modifier.weight(1f)) {
+                Text("Полноэкранные уведомления")
+                Text(
+                    if (fsi) "Разрешено системой" else "Запасной способ показать окно поверх блокировки",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+            Switch(
+                checked = fsi,
+                onCheckedChange = {
+                    runCatching {
+                        ctx.startActivity(
+                            android.content.Intent(
+                                android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                                android.net.Uri.parse("package:${ctx.packageName}"),
+                            )
+                        )
+                    }
+                },
+            )
+        }
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = {
