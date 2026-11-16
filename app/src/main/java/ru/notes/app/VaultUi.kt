@@ -187,7 +187,9 @@ private fun VaultPhotos() {
     ) {
         gridItems(photos, key = { it.file }) { p ->
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Thumb(Attachment(p.file, "фото", "image/*"), 110.dp) { viewing = p }
+                // тап — открыть, долгий тап — удалить
+                Thumb(Attachment(p.file, "фото", "image/*"), 110.dp,
+                    onClick = { viewing = p }, onLongClick = { askDelete = p })
             }
         }
     }

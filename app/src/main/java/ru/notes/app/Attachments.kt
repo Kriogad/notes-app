@@ -15,6 +15,7 @@ import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -146,15 +147,20 @@ object Background {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun Thumb(a: Attachment, size: Dp, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
+fun Thumb(a: Attachment, size: Dp, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, onLongClick: (() -> Unit)? = null) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val bmp by produceState<ImageBitmap?>(null, a.file) {
         value = withContext(Dispatchers.IO) { Attachments.thumbnail(ctx, a, 400) }
     }
     val m = modifier.size(size).clip(RoundedCornerShape(8.dp))
         .background(MaterialTheme.colorScheme.surfaceVariant)
-        .let { if (onClick != null) it.clickable(onClick = onClick) else it }
+        .let {
+            if (onClick != null || onLongClick != null)
+                it.combinedClickable(onClick = { onClick?.invoke() }, onLongClick = onLongClick)
+            else it
+        }
     Box(m) {
         bmp?.let { Image(it, a.name, Modifier.size(size), contentScale = ContentScale.Crop) }
     }
