@@ -537,7 +537,9 @@ fun SettingsScreen(host: Host, onBack: () -> Unit) {
             Text("Шрифт виджетов", style = MaterialTheme.typography.titleMedium)
             var fontScale by remember { mutableStateOf(WidgetPrefs.fontScale(ctx)) }
             var fontMenu by remember { mutableStateOf(false) }
-            val fontOptions = listOf(0.85f to "Мелкий", 1.0f to "Обычный", 1.25f to "Крупный")
+            val fontOptions = listOf(
+                0.7f to "−30%", 0.8f to "−20%", 0.9f to "−10%", 1.0f to "Обычный", 1.1f to "+10%",
+            )
             Box {
                 OutlinedButton(onClick = { fontMenu = true }, modifier = Modifier.fillMaxWidth()) {
                     Text(fontOptions.firstOrNull { it.first == fontScale }?.second ?: "Обычный")
