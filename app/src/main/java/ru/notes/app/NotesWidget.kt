@@ -45,9 +45,9 @@ private val KeyNew = ActionParameters.Key<Boolean>(EXTRA_NEW)
 
 class NotesWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val scale = WidgetPrefs.fontScale(context)
         provideContent {
             val notes by Notes.notes.collectAsState()
+            val scale by WidgetPrefs.fontScale(context).collectAsState()
             GlanceTheme { Content(notes.filter { !it.done }, scale) } // выполненные — в архиве
         }
     }

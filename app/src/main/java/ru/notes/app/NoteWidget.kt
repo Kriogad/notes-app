@@ -102,19 +102,27 @@ object WidgetPrefs {
         (all(ctx) as MutableStateFlow).value = all(ctx).value - widgetId
     }
 
-    /** Масштаб шрифта виджетов: 0.85 мелкий, 1.0 обычный, 1.25 крупный. */
-    fun fontScale(ctx: Context) = prefs(ctx).getFloat("font_scale", 1f)
-    fun setFontScale(ctx: Context, v: Float) = prefs(ctx).edit().putFloat("font_scale", v).apply()
+    /** Масштаб шрифта виджетов: 0.7…1.1. Flow — виджеты перерисовываются сразу. */
+    private var fontFlow: MutableStateFlow<Float>? = null
+
+    @Synchronized
+    fun fontScale(ctx: Context): StateFlow<Float> =
+        fontFlow ?: MutableStateFlow(prefs(ctx).getFloat("font_scale", 1f)).also { fontFlow = it }
+
+    fun setFontScale(ctx: Context, v: Float) {
+        prefs(ctx).edit().putFloat("font_scale", v).apply()
+        fontFlow?.value = v
+    }
 }
 
 /** Виджет одной заметки: пункты списка с галочками. */
 class NoteWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val widgetId = GlanceAppWidgetManager(context).getAppWidgetId(id)
-        val scale = WidgetPrefs.fontScale(context)
         provideContent {
             val notes by Notes.notes.collectAsState()
             val links by WidgetPrefs.all(context).collectAsState()
+            val scale by WidgetPrefs.fontScale(context).collectAsState()
             val noteId = links[widgetId]
             val pick = actionStartActivity(
                 Intent(context, NoteWidgetConfig::class.java)

@@ -535,7 +535,7 @@ fun SettingsScreen(host: Host, onBack: () -> Unit) {
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
             Text("Шрифт виджетов", style = MaterialTheme.typography.titleMedium)
-            var fontScale by remember { mutableStateOf(WidgetPrefs.fontScale(ctx)) }
+            var fontScale by remember { mutableStateOf(WidgetPrefs.fontScale(ctx).value) }
             var fontMenu by remember { mutableStateOf(false) }
             val fontOptions = listOf(
                 0.7f to "−30%", 0.8f to "−20%", 0.9f to "−10%", 1.0f to "Обычный", 1.1f to "+10%",
