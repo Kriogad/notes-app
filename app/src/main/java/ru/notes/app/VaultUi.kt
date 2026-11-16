@@ -103,17 +103,41 @@ fun VaultScreen(host: Host, onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: (
             )
         },
         floatingActionButton = {
-            if (unlocked) FloatingActionButton(onClick = {
-                if (tab == 0) onNew()
-                else host.pickPhotos { uris ->
-                    scope.launch {
-                        importing = true
-                        val n = Vault.importPhotos(ctx, uris)
-                        importing = false
-                        if (n < uris.size) Toast.makeText(ctx, "Не все фото удалось добавить", Toast.LENGTH_LONG).show()
+            if (unlocked) {
+                var addMenu by remember { mutableStateOf(false) }
+                Box {
+                    FloatingActionButton(onClick = {
+                        if (tab == 0) onNew() else addMenu = true
+                    }) { Icon(Icons.Filled.Add, if (tab == 0) "Новая секретная заметка" else "Добавить фото") }
+                    DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
+                        DropdownMenuItem(text = { Text("Снять фото") }, onClick = {
+                            addMenu = false
+                            host.takePhoto { uri ->
+                                if (uri == null) return@takePhoto
+                                scope.launch {
+                                    importing = true
+                                    val n = Vault.importPhotos(ctx, listOf(uri))
+                                    importing = false
+                                    // временный снимок из кэша больше не нужен
+                                    ctx.contentResolver.delete(uri, null, null)
+                                    if (n == 0) Toast.makeText(ctx, "Не удалось добавить фото", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        })
+                        DropdownMenuItem(text = { Text("Из галереи") }, onClick = {
+                            addMenu = false
+                            host.pickPhotos { uris ->
+                                scope.launch {
+                                    importing = true
+                                    val n = Vault.importPhotos(ctx, uris)
+                                    importing = false
+                                    if (n < uris.size) Toast.makeText(ctx, "Не все фото удалось добавить", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        })
                     }
                 }
-            }) { Icon(Icons.Filled.Add, if (tab == 0) "Новая секретная заметка" else "Добавить фото") }
+            }
         },
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).imePadding()) {

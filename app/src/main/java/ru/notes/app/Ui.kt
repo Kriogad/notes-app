@@ -187,6 +187,7 @@ interface Host {
     fun biometric(cipher: javax.crypto.Cipher, title: String, onOk: (javax.crypto.Cipher) -> Unit)
     fun pickPhotos(onPicked: (List<android.net.Uri>) -> Unit)
     fun pickFiles(onPicked: (List<android.net.Uri>) -> Unit)
+    fun takePhoto(onTaken: (android.net.Uri?) -> Unit)
     fun pickSound(current: android.net.Uri?, onPicked: (android.net.Uri?) -> Unit)
     fun pickAudio(onPicked: (android.net.Uri) -> Unit)
 }

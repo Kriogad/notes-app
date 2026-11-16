@@ -71,6 +71,28 @@ class MainActivity : ComponentActivity(), Host {
         audioPicker.launch("audio/*")
     }
 
+    // Снимок камерой во временный файл кэша; после импорта в сейф файл удаляется
+    private var onShot: ((Uri?) -> Unit)? = null
+    private var shotUri: Uri? = null
+    private val camera = registerForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val u = shotUri
+        onShot?.invoke(if (ok) u else null)
+        if (!ok && u != null) runCatching { contentResolver.delete(u, null, null) }
+    }
+
+    override fun takePhoto(onTaken: (Uri?) -> Unit) {
+        // старые недошифрованные снимки подчищаем
+        cacheDir.listFiles { f -> f.name.startsWith("shot_") }?.forEach { it.delete() }
+        val f = java.io.File(cacheDir, "shot_${System.currentTimeMillis()}.jpg")
+        val u = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.files", f)
+        shotUri = u
+        onShot = onTaken
+        runCatching { camera.launch(u) }.onFailure {
+            Toast.makeText(this, "Камера недоступна: ${it.message}", Toast.LENGTH_LONG).show()
+            onTaken(null)
+        }
+    }
+
     override fun pickSound(current: Uri?, onPicked: (Uri?) -> Unit) {
         onSound = onPicked
         soundPicker.launch(
