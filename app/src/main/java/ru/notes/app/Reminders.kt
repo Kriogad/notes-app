@@ -179,6 +179,31 @@ object Reminders {
         }
     }
 
+    /** Заголовок и текст напоминания — для большого окна. */
+    fun contentOf(n: Note, item: Long): Pair<String, String>? =
+        rems(n).find { it.item == item }?.let { it.title to it.text }
+
+    /** «Выполнено» из уведомления или большого окна. */
+    fun done(ctx: Context, id: Long, item: Long) {
+        val note = Notes.get(id) ?: return
+        val r = rems(note).find { it.item == item } ?: return
+        ack(ctx, id, item)
+        // Заметка целиком: в архив (повторяющаяся — с новой копией на следующий раз).
+        // Повторяющийся пункт просто ждёт следующего раза.
+        if (item == 0L) Notes.setDone(id, true)
+        else if (r.repeat == Repeat.NONE) {
+            Notes.upsert(note.copy(items = note.items.map { if (it.id == item) it.copy(checked = true) else it }))
+        }
+    }
+
+    /** «Отложить» из уведомления или большого окна. */
+    fun snooze(ctx: Context, id: Long, item: Long, minutes: Int) {
+        SoundService.stop(ctx)
+        NotificationManagerCompat.from(ctx).cancel(key(id, item).hashCode())
+        setPending(ctx, key(id, item), true)
+        alarm(ctx, ACTION_NAG, id, item, System.currentTimeMillis() + minutes * 60_000L)
+    }
+
     private fun Note.withRemind(item: Long, at: Long?) =
         if (item == 0L) copy(remindAt = at)
         else copy(items = items.map { if (it.id == item) it.copy(remindAt = at) else it })
@@ -296,9 +321,18 @@ object Reminders {
                 .putExtra(EXTRA_OPEN, note.id).putExtra(EXTRA_ITEM, r.item).putExtra(EXTRA_ACK, true),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        // Большое окно поверх экрана блокировки
+        val full = PendingIntent.getActivity(
+            ctx, k.hashCode() xor 7,
+            Intent(ctx, RingActivity::class.java).setData(Uri.parse("notes://ring/$k"))
+                .putExtra(EXTRA_ID, note.id).putExtra(EXTRA_ITEM, r.item)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         ring(ctx, k.hashCode(), { ch ->
             builder(ctx, ch, r.title, r.text)
                 .setContentIntent(open)
+                .setFullScreenIntent(full, true)
                 .addAction(0, "Выполнено", broadcast(ctx, ACTION_DONE, note.id, r.item))
                 .addAction(0, "+10 мин", broadcast(ctx, ACTION_SNOOZE_10, note.id, r.item))
                 .addAction(0, "+1 час", broadcast(ctx, ACTION_SNOOZE_60, note.id, r.item))
@@ -306,6 +340,18 @@ object Reminders {
         setPending(ctx, k, true)
         val nag = nagMinutes(ctx)
         if (nag > 0) alarm(ctx, ACTION_NAG, note.id, r.item, System.currentTimeMillis() + nag * 60_000L)
+        // Телефон разблокирован: система покажет только плашку сверху, а мы хотим большое окно.
+        // Запустить его сразу можно, если дано разрешение «поверх других приложений».
+        val locked = ctx.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked != false
+        if (!locked && android.provider.Settings.canDrawOverlays(ctx)) {
+            runCatching {
+                ctx.startActivity(
+                    Intent(ctx, RingActivity::class.java).setData(Uri.parse("notes://ring/$k"))
+                        .putExtra(EXTRA_ID, note.id).putExtra(EXTRA_ITEM, r.item)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
+        }
     }
 
     /** Проверка звука из настроек (или из окна напоминания — со своей мелодией и громкостью). */
@@ -342,22 +388,9 @@ object Reminders {
                 }
             }
             ACTION_NAG -> if (!r.done && key(id, item) in pending(ctx)) show(ctx, note, r)
-            ACTION_DONE -> {
-                ack(ctx, id, item)
-                // Заметка целиком: в архив (повторяющаяся — с новой копией на следующий раз).
-                // Повторяющийся пункт просто ждёт следующего раза.
-                if (item == 0L) Notes.setDone(id, true)
-                else if (r.repeat == Repeat.NONE) {
-                    Notes.upsert(note.copy(items = note.items.map { if (it.id == item) it.copy(checked = true) else it }))
-                }
-            }
-            ACTION_SNOOZE_10, ACTION_SNOOZE_60 -> {
-                SoundService.stop(ctx)
-                NotificationManagerCompat.from(ctx).cancel(key(id, item).hashCode())
-                setPending(ctx, key(id, item), true)
-                val min = if (intent.action == ACTION_SNOOZE_10) 10 else 60
-                alarm(ctx, ACTION_NAG, id, item, System.currentTimeMillis() + min * 60_000L)
-            }
+            ACTION_DONE -> done(ctx, id, item)
+            ACTION_SNOOZE_10 -> snooze(ctx, id, item, 10)
+            ACTION_SNOOZE_60 -> snooze(ctx, id, item, 60)
         }
     }
 }

@@ -268,6 +268,35 @@ private fun RemindSettings(host: Host) {
             }
         }
     }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        var overlay by remember { mutableStateOf(android.provider.Settings.canDrawOverlays(ctx)) }
+        LaunchedEffect(Unit) {
+            // обновить статус после возврата из системных настроек
+            while (true) { overlay = android.provider.Settings.canDrawOverlays(ctx); kotlinx.coroutines.delay(1000) }
+        }
+        Column(Modifier.weight(1f)) {
+            Text("Большое окно на весь экран")
+            Text(
+                if (overlay) "Разрешено: окно вылетает и на разблокированном телефоне"
+                else "Чтобы окно вылетало на разблокированном телефоне, разрешите «поверх других приложений»",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+        Switch(
+            checked = overlay,
+            onCheckedChange = {
+                runCatching {
+                    ctx.startActivity(
+                        android.content.Intent(
+                            android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            android.net.Uri.parse("package:${ctx.packageName}"),
+                        )
+                    )
+                }
+            },
+        )
+    }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = {
             host.askNotificationPermission()
