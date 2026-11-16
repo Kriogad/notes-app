@@ -84,6 +84,7 @@ class App : Application() {
         Vault.init(this)
         Backup.init(this)
         Notes.init(this)
+        Shared.init(this)
         Reminders.createChannel(this)
     }
 }

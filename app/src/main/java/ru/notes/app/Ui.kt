@@ -141,6 +141,7 @@ fun NotesApp(host: Host, openRequest: Long?, onOpenHandled: () -> Unit) {
     }
 
     val secret = section == Section.Vault
+    var sharedCode by rememberSaveable { mutableStateOf<String?>(null) }
 
     // Секретный раздел: в списке недавних приложений карточка пустая, скриншоты запрещены
     val activity = LocalContext.current as? Activity
@@ -160,6 +161,8 @@ fun NotesApp(host: Host, openRequest: Long?, onOpenHandled: () -> Unit) {
         }
         section == Section.Settings -> SettingsScreen(host, onBack = { section = Section.Main })
         section == Section.Calendar -> CalendarScreen(host, onBack = { section = Section.Main }, onOpen = { editing = it })
+        sharedCode != null -> SharedProjectScreen(host, sharedCode!!, onBack = { sharedCode = null })
+        section == Section.Shared -> SharedScreen(host, onBack = { section = Section.Main }, onOpen = { sharedCode = it })
         secret -> VaultScreen(
             host,
             onBack = { Vault.lock(); section = Section.Main },
@@ -171,13 +174,14 @@ fun NotesApp(host: Host, openRequest: Long?, onOpenHandled: () -> Unit) {
             onOpen = { editing = it },
             onNew = { editing = System.currentTimeMillis() },
             onVault = { section = Section.Vault },
+            onShared = { section = Section.Shared },
             onSettings = { section = Section.Settings },
             onCalendar = { section = Section.Calendar },
         )
     }
 }
 
-enum class Section { Main, Vault, Settings, Calendar }
+enum class Section { Main, Vault, Settings, Calendar, Shared }
 
 /** Что экранам нужно от Activity. */
 interface Host {
@@ -204,6 +208,7 @@ private fun ListScreen(
     onOpen: (Long) -> Unit,
     onNew: () -> Unit,
     onVault: () -> Unit,
+    onShared: () -> Unit,
     onSettings: () -> Unit,
     onCalendar: () -> Unit,
 ) {
@@ -266,6 +271,7 @@ private fun ListScreen(
                         }
                         IconButton(onClick = { searching = true }) { Icon(Icons.Filled.Search, "Поиск") }
                         IconButton(onClick = onCalendar) { Icon(Icons.Filled.DateRange, "Календарь") }
+                        IconButton(onClick = onShared) { Text("👥") }
                         IconButton(onClick = onVault) { Icon(Icons.Filled.Lock, "Секретные заметки") }
                         IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, "Настройки и резервная копия") }
                     }
