@@ -15,7 +15,7 @@ import java.util.Locale
  */
 class VoiceActivity : ComponentActivity() {
     private val voice = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { save(it) }
+        r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()?.let { save(NumberWords.convert(it)) }
         finish()
     }
 

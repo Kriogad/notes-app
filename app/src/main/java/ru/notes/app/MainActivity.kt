@@ -39,7 +39,7 @@ class MainActivity : ComponentActivity(), Host {
 
     private val voice = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
         r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-            ?.let { onVoiceText?.invoke(it) }
+            ?.let { onVoiceText?.invoke(NumberWords.convert(it)) }
     }
     private var onPicked: ((List<Uri>) -> Unit)? = null
     private val photoPicker = registerForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { onPicked?.invoke(it) }
