@@ -418,6 +418,7 @@ fun NoteCard(
     // В секретном разделе пункты (пароли) скрыты за точками; глаз — подглядеть
     val isVault = store === Vault
     var revealed by remember(note.id) { mutableStateOf(false) }
+    var viewing by remember { mutableStateOf<Attachment?>(null) } // фото на весь экран
     Card(onClick = onClick, modifier = modifier.fillMaxWidth()) {
         Row(Modifier.padding(end = 12.dp, top = 4.dp, bottom = 8.dp)) {
             Checkbox(checked = note.done, onCheckedChange = { store.setDone(note.id, it) })
@@ -490,7 +491,7 @@ fun NoteCard(
                 if (note.attachments.isNotEmpty()) {
                     Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically) {
-                        note.attachments.filter { it.isImage }.take(3).forEach { Thumb(it, 56.dp) }
+                        note.attachments.filter { it.isImage }.take(3).forEach { a -> Thumb(a, 56.dp) { viewing = a } }
                         Text("📎 ${note.attachments.size}", style = MaterialTheme.typography.labelMedium,
                             modifier = Modifier.padding(start = 4.dp))
                     }
@@ -521,6 +522,8 @@ fun NoteCard(
             }
         }
     }
+    // Фото — на весь экран внутри приложения
+    viewing?.let { PhotoViewer(it) { viewing = null } }
 }
 
 /** Быстрое добавление пунктов с главного экрана: вписал → Enter → следующий; или голосом. */
