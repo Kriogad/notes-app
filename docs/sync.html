@@ -38,14 +38,14 @@
   .chk.done .txt { text-decoration: line-through; color: var(--dim); }
   .chk .del { margin-left: auto; color: var(--dim); background: none; padding: 2px 8px; font-size: 16px; }
   .chk .del:hover { color: var(--danger); }
-  .edItem { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
-  .edItem input { flex: 1; }
   .cat { margin: 18px 0 6px; color: var(--accent); font-weight: 600; }
   .copy { background: none; color: var(--dim); padding: 2px 8px; font-size: 14px; }
   .copy:hover { color: var(--accent); }
   .vtext { white-space: pre-wrap; word-break: break-word; }
   .vdel { color: var(--dim); background: none; padding: 4px 8px; font-size: 16px; }
   .vdel:hover { color: var(--danger); }
+  .edit { background: none; color: var(--dim); padding: 2px 8px; font-size: 16px; }
+  .edit:hover { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -84,7 +84,7 @@
       <div id="notesList"></div>
       <button style="width:100%; margin-top:10px" onclick="newNote()">＋ Новая заметка</button>
 
-      <!-- редактор -->
+      <!-- редактор заметки -->
       <div id="editor" style="display:none" class="card">
         <input type="text" id="edTitle" placeholder="Название" oninput="scheduleSave()">
         <textarea id="edText" placeholder="Текст заметки…" style="margin-top:10px" oninput="scheduleSave()"></textarea>
@@ -112,7 +112,7 @@
                    onkeydown="if(event.key==='Enter')unlockVault()">
             <button onclick="unlockVault()">Открыть</button>
           </div>
-          <p class="dim" style="margin-top:10px; font-size:13px">Пароль никуда не отправляется — расшифровка происходит в вашем браузере. Редактирование секретки — только с телефона.</p>
+          <p class="dim" style="margin-top:10px; font-size:13px">Пароль никуда не отправляется — шифрование и расшифровка происходят в вашем браузере, в облаке лежит только шифротекст.</p>
         </div>
       </div>
       <div id="vaultOpen" style="display:none">
@@ -120,7 +120,27 @@
           <p class="dim grow">Открыто. Не оставляйте вкладку без присмотра.</p>
           <button class="ghost mini" onclick="lockVault()">Закрыть</button>
         </div>
+
+        <!-- редактор секретной записи -->
+        <div id="vaultEditor" style="display:none" class="card">
+          <input type="text" id="veTitle" placeholder="Название (например, сайт)" oninput="vScheduleSave()">
+          <input type="text" id="veCat" placeholder="Категория (Пароли, Сайты…)" list="catList" style="margin-top:8px" oninput="vScheduleSave()">
+          <datalist id="catList"></datalist>
+          <textarea id="veText" placeholder="Текст…" style="margin-top:8px; min-height:80px" oninput="vScheduleSave()"></textarea>
+          <div id="veItems" style="margin-top:6px"></div>
+          <div class="row" style="margin-top:6px">
+            <input type="text" id="veNewItem" class="grow" placeholder="Новый пункт (логин, пароль…)" onkeydown="if(event.key==='Enter')vAddItem()">
+            <button class="ghost mini" onclick="vAddItem()">＋</button>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button class="ghost mini grow" onclick="vCloseEditor()">Закрыть</button>
+            <button class="ghost mini vdel" onclick="vDelete()">Удалить</button>
+          </div>
+          <p class="dim" id="veStatus" style="margin-top:8px; font-size:13px"></p>
+        </div>
+
         <div id="vaultList"></div>
+        <button style="width:100%; margin-top:10px" onclick="vNew()">＋ Добавить запись</button>
       </div>
     </div>
   </div>
@@ -130,7 +150,7 @@
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getDatabase, ref, onValue, set, remove, get }
+  import { getDatabase, ref, onValue, set, remove }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
   const db = getDatabase(initializeApp({
@@ -142,8 +162,11 @@
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-  let code = null, notes = {}, notesRaw = {}, vaultRaw = null, unsubNotes = null, unsubVault = null;
+  let code = null, notes = {}, vaultRaw = null, unsubNotes = null, unsubVault = null;
   let editing = null, saveTimer = null, applyingRemote = false;
+  // секретка
+  let vaultKey = null, vaultSalt = "", vaultHint = "", vaultPhotos = null;
+  let vaultNotes = [], lastWrittenVault = null, vEditing = null, vSaveTimer = null, vApplying = false;
 
   function toast(t) {
     const el = $("toast"); el.textContent = t; el.style.display = "block";
@@ -167,7 +190,8 @@
   function disconnect() {
     if (unsubNotes) unsubNotes();
     if (unsubVault) unsubVault();
-    code = null; notes = {}; notesRaw = {}; vaultRaw = null; editing = null;
+    lockVault();
+    code = null; notes = {}; vaultRaw = null; editing = null;
     localStorage.removeItem("notesSyncCode");
     history.replaceState(null, "", location.pathname);
     $("main").style.display = "none";
@@ -176,24 +200,26 @@
 
   function subscribe() {
     unsubNotes = onValue(ref(db, `sync/${code}/notes`), snap => {
-      notes = {}; notesRaw = {};
+      notes = {};
       snap.forEach(c => {
         const v = c.val();
         if (!v || !v.j) return;
-        try { notes[c.key] = JSON.parse(v.j); notesRaw[c.key] = v.j; } catch (e) {}
+        try { notes[c.key] = JSON.parse(v.j); } catch (e) {}
       });
       renderNotes();
       if (editing && notes[editing] && !saveTimer) fillEditor(notes[editing]);
     });
     unsubVault = onValue(ref(db, `sync/${code}/vault`), snap => {
+      const j = snap.val()?.j ?? null;
+      if (j && j === lastWrittenVault) { vaultRaw = j; return; } // своё же сохранение
       const wasOpen = $("vaultOpen").style.display === "block";
-      vaultRaw = snap.val()?.j ?? null;
-      if (wasOpen) { lockVault(); toast("Секретка изменилась — откройте заново"); }
+      vaultRaw = j;
+      if (wasOpen) { lockVault(); toast("Секретка изменилась на другом устройстве — откройте заново"); }
       renderVaultHint();
     });
   }
 
-  // ---------- заметки ----------
+  // ---------- обычные заметки ----------
 
   function sortedNotes() {
     return Object.values(notes).sort((a, b) =>
@@ -201,6 +227,8 @@
       ((a.pos ?? 9e15) - (b.pos ?? 9e15)) ||
       ((b.updated ?? 0) - (a.updated ?? 0)));
   }
+
+  const firstLine = n => (n.text || "").split("\n").find(l => l.trim()) || (n.items || []).find(i => i.t)?.t || "";
 
   function renderNotes() {
     const box = $("notesList");
@@ -217,8 +245,6 @@
       box.appendChild(d);
     });
   }
-
-  const firstLine = n => (n.text || "").split("\n").find(l => l.trim()) || (n.items || []).find(i => i.t)?.t || "";
 
   function openEditor(id) {
     editing = id;
@@ -239,8 +265,8 @@
       const row = document.createElement("div");
       row.className = "chk" + (it.c ? " done" : "");
       row.innerHTML = `<span class="box">${it.c ? "✓" : ""}</span><span class="txt">${esc(it.t)}</span><button class="del">✕</button>`;
-      row.onclick = () => { it.c = !it.c; saveNow(); };
-      row.querySelector(".del").onclick = e => { e.stopPropagation(); notes[editing].items.splice(idx, 1); saveNow(); };
+      row.onclick = () => { it.c = !it.c; saveNow(); fillEditor(notes[editing]); };
+      row.querySelector(".del").onclick = e => { e.stopPropagation(); notes[editing].items.splice(idx, 1); saveNow(); fillEditor(notes[editing]); };
       box.appendChild(row);
     });
     applyingRemote = false;
@@ -310,6 +336,13 @@
 
   // ---------- секретка ----------
 
+  const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+  const enc64 = bytes => {
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(s);
+  };
+
   function renderVaultHint() {
     if (!vaultRaw) {
       $("vaultHint").textContent = "Секретка ещё не синхронизирована — откройте секретный раздел на телефоне, и он появится здесь.";
@@ -322,8 +355,6 @@
     $("vaultHint").textContent = hint ? "Подсказка: " + hint : "Введите пароль секретного раздела.";
   }
 
-  const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-
   async function unlockVault() {
     const pass = $("vaultPass").value;
     if (!pass || !vaultRaw) return;
@@ -332,11 +363,12 @@
       const km = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveKey"]);
       const key = await crypto.subtle.deriveKey(
         { name: "PBKDF2", salt: b64(o.salt), iterations: 200000, hash: "SHA-256" },
-        km, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+        km, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
       const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(o.iv) }, key, b64(o.data));
-      const arr = JSON.parse(new TextDecoder().decode(plain));
+      vaultKey = key; vaultSalt = o.salt; vaultHint = o.hint || ""; vaultPhotos = o.photos ?? null;
+      vaultNotes = JSON.parse(new TextDecoder().decode(plain));
       $("vaultPass").value = "";
-      renderVault(arr);
+      renderVault();
       $("vaultLocked").style.display = "none";
       $("vaultOpen").style.display = "block";
     } catch (e) {
@@ -345,45 +377,154 @@
   }
 
   function lockVault() {
+    vaultKey = null; vaultNotes = []; vEditing = null; lastWrittenVault = null;
+    clearTimeout(vSaveTimer); vSaveTimer = null;
     $("vaultOpen").style.display = "none";
     $("vaultLocked").style.display = "block";
     $("vaultList").innerHTML = "";
+    $("vaultEditor").style.display = "none";
   }
 
-  function renderVault(arr) {
+  function renderVault() {
     const box = $("vaultList");
-    box.innerHTML = arr.length ? "" : "<p class='dim'>Секретный раздел пуст.</p>";
-    arr.sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0));
-    const cats = new Map();
-    arr.forEach(n => {
+    box.innerHTML = vaultNotes.length ? "" : "<p class='dim'>Секретный раздел пуст — добавьте первую запись.</p>";
+    // категории для подсказки в редакторе
+    const cats = [...new Set(vaultNotes.map(n => n.cat || "").filter(c => c))].sort((a, b) => a.localeCompare(b, "ru"));
+    $("catList").innerHTML = cats.map(c => `<option value="${esc(c)}">`).join("");
+    const sorted = [...vaultNotes].sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0));
+    const byCat = new Map();
+    sorted.forEach(n => {
       const c = n.cat || "";
-      if (!cats.has(c)) cats.set(c, []);
-      cats.get(c).push(n);
+      if (!byCat.has(c)) byCat.set(c, []);
+      byCat.get(c).push(n);
     });
-    [...cats.keys()].sort((a, b) => (a === "") - (b === "") || a.localeCompare(b, "ru")).forEach(cat => {
+    [...byCat.keys()].sort((a, b) => (a === "") - (b === "") || a.localeCompare(b, "ru")).forEach(cat => {
       if (cat) {
         const h = document.createElement("div");
         h.className = "cat";
         h.textContent = cat;
         box.appendChild(h);
       }
-      cats.get(cat).forEach(n => {
+      byCat.get(cat).forEach(n => {
         const d = document.createElement("div");
         d.className = "card";
-        let html = `<div class="nt" style="font-weight:600">${esc(n.title || "Без названия")}</div>`;
+        let html = `<div class="row"><div class="nt grow" style="font-weight:600">${esc(n.title || "Без названия")}</div>` +
+          `<button class="edit" title="Изменить">✎</button></div>`;
         if (n.text) html += `<div class="vtext" style="margin-top:6px">${esc(n.text)}</div>`;
-        (n.items || []).forEach(it => {
-          html += `<div class="row" style="margin-top:4px"><span class="vtext grow">${it.c ? "✓ " : ""}${esc(it.t)}</span>` +
-            `<button class="copy" data-v="${esc(it.t)}">копировать</button></div>`;
+        (n.items || []).forEach((it, idx) => {
+          html += `<div class="chk${it.c ? " done" : ""}" data-idx="${idx}"><span class="box">${it.c ? "✓" : ""}</span>` +
+            `<span class="txt vtext">${esc(it.t)}</span><button class="copy" data-v="${esc(it.t)}">копировать</button></div>`;
         });
-        if (n.text) html += `<button class="copy" data-v="${esc(n.text)}" style="margin-top:6px">копировать текст</button>`;
         d.innerHTML = html;
+        d.querySelector(".edit").onclick = () => vEdit(n.id);
+        d.querySelectorAll(".chk").forEach(row => row.onclick = e => {
+          if (e.target.classList.contains("copy")) return;
+          const it = n.items[+row.dataset.idx];
+          it.c = !it.c;
+          n.updated = Date.now();
+          renderVault();
+          saveVault();
+        });
         d.querySelectorAll(".copy").forEach(b => b.onclick = () => {
           navigator.clipboard?.writeText(b.dataset.v).then(() => toast("Скопировано"));
         });
         box.appendChild(d);
       });
     });
+  }
+
+  const vById = id => vaultNotes.find(n => String(n.id) === String(id));
+
+  function vNew() {
+    const n = { id: Date.now(), title: "", text: "", items: [], done: false, updated: Date.now(), cat: "" };
+    vaultNotes.push(n);
+    saveVault();
+    vEdit(n.id);
+  }
+
+  function vEdit(id) {
+    vEditing = id;
+    $("vaultEditor").style.display = "block";
+    vFill(vById(id));
+    $("vaultEditor").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function vFill(n) {
+    if (!n) return;
+    vApplying = true;
+    $("veTitle").value = n.title || "";
+    $("veCat").value = n.cat || "";
+    $("veText").value = n.text || "";
+    const box = $("veItems");
+    box.innerHTML = "";
+    (n.items || []).forEach((it, idx) => {
+      const row = document.createElement("div");
+      row.className = "chk" + (it.c ? " done" : "");
+      row.innerHTML = `<span class="box">${it.c ? "✓" : ""}</span><span class="txt vtext">${esc(it.t)}</span><button class="del">✕</button>`;
+      row.onclick = () => { it.c = !it.c; vSaveNow(); vFill(vById(vEditing)); };
+      row.querySelector(".del").onclick = e => { e.stopPropagation(); n.items.splice(idx, 1); vSaveNow(); vFill(vById(vEditing)); };
+      box.appendChild(row);
+    });
+    vApplying = false;
+  }
+
+  function vCloseEditor() { vEditing = null; $("vaultEditor").style.display = "none"; }
+
+  function vAddItem() {
+    const t = $("veNewItem").value.trim();
+    if (!t || !vEditing) return;
+    const n = vById(vEditing);
+    n.items = n.items || [];
+    n.items.push({ t, c: false, i: Date.now() });
+    $("veNewItem").value = "";
+    vSaveNow();
+  }
+
+  async function vDelete() {
+    if (!vEditing) return;
+    if (!confirm("Удалить запись? На телефоне она тоже удалится.")) return;
+    vaultNotes = vaultNotes.filter(n => String(n.id) !== String(vEditing));
+    vCloseEditor();
+    renderVault();
+    saveVault();
+    toast("Удалено");
+  }
+
+  function vScheduleSave() {
+    if (vApplying || !vEditing) return;
+    clearTimeout(vSaveTimer);
+    vSaveTimer = setTimeout(vSaveFromFields, 800);
+    $("veStatus").textContent = "Сохраняю…";
+  }
+
+  function vSaveFromFields() {
+    if (!vEditing) return;
+    const n = vById(vEditing);
+    if (!n) return;
+    n.title = $("veTitle").value;
+    n.cat = $("veCat").value.trim();
+    n.text = $("veText").value;
+    n.updated = Date.now();
+    renderVault();
+    saveVault();
+  }
+
+  function vSaveNow() {
+    clearTimeout(vSaveTimer); vSaveTimer = null;
+    if (vEditing) vSaveFromFields(); else { renderVault(); saveVault(); }
+  }
+
+  async function saveVault() {
+    if (!vaultKey) return;
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const data = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, vaultKey,
+      new TextEncoder().encode(JSON.stringify(vaultNotes)));
+    const o = { v: 1, salt: vaultSalt, iv: enc64(iv), data: enc64(new Uint8Array(data)), hint: vaultHint };
+    if (vaultPhotos) o.photos = vaultPhotos;
+    const j = JSON.stringify(o);
+    lastWrittenVault = j; vaultRaw = j;
+    await set(ref(db, `sync/${code}/vault`), { j, u: Date.now() });
+    $("veStatus").textContent = "Сохранено " + new Date().toLocaleTimeString("ru-RU");
   }
 
   // ---------- вкладки ----------
@@ -405,6 +546,8 @@
   window.newNote = newNote; window.addItem = addItem; window.toggleDone = toggleDone;
   window.deleteNote = deleteNote; window.closeEditor = closeEditor; window.scheduleSave = scheduleSave;
   window.unlockVault = unlockVault; window.lockVault = lockVault;
+  window.vNew = vNew; window.vAddItem = vAddItem; window.vDelete = vDelete;
+  window.vCloseEditor = vCloseEditor; window.vScheduleSave = vScheduleSave;
 </script>
 </body>
 </html>
