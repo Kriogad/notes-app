@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Заметки — общие списки</title>
+<style>
+  :root { --bg:#111318; --card:#1d2027; --field:#262a33; --text:#e8eaf0; --dim:#9aa0ad; --accent:#8ab4f8; --danger:#f28b82; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, sans-serif; min-height: 100vh; }
+  .wrap { max-width: 620px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 12px 0 4px; }
+  .dim { color: var(--dim); }
+  .card { background: var(--card); border-radius: 14px; padding: 14px 16px; margin: 8px 0; }
+  input[type=text] { width: 100%; background: var(--field); color: var(--text); border: none; border-radius: 10px; padding: 12px 14px; font-size: 16px; outline: none; }
+  input[type=text]:focus { box-shadow: 0 0 0 2px var(--accent); }
+  button { background: var(--accent); color: #111; border: none; border-radius: 10px; padding: 12px 18px; font-size: 16px; font-weight: 600; cursor: pointer; }
+  button.ghost { background: var(--field); color: var(--text); font-weight: 400; }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .grow { flex: 1; }
+  .item { display: flex; align-items: center; gap: 10px; padding: 10px 4px; border-bottom: 1px solid #ffffff10; cursor: pointer; user-select: none; }
+  .item:last-child { border-bottom: none; }
+  .item .box { width: 22px; height: 22px; border: 2px solid var(--dim); border-radius: 6px; flex: none; display: grid; place-items: center; font-size: 14px; color: #111; }
+  .item.done .box { background: var(--accent); border-color: var(--accent); }
+  .item.done .txt { text-decoration: line-through; color: var(--dim); }
+  .item .del { margin-left: auto; color: var(--dim); background: none; padding: 4px 8px; font-size: 18px; }
+  .item .del:hover { color: var(--danger); }
+  .code { font-size: 22px; letter-spacing: 3px; font-weight: 700; color: var(--accent); }
+  .listlink { cursor: pointer; }
+  .listlink:hover { border: 1px solid var(--accent); }
+  .top { position: sticky; top: 0; background: var(--bg); padding-top: 8px; z-index: 2; }
+  a { color: var(--accent); }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--card); padding: 10px 18px; border-radius: 10px; display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- вход по коду -->
+  <div id="home">
+    <h1>📝 Заметки — общие списки</h1>
+    <p class="dim">Веб-версия общих списков из Android-приложения «Заметки». Введите код приглашения — правки синхронизируются с телефоном за секунду.</p>
+    <div class="card">
+      <div class="row">
+        <input type="text" id="codeInput" class="grow" placeholder="Код приглашения, например K7M4P2QD" maxlength="12" style="text-transform:uppercase">
+        <button onclick="join()">Войти</button>
+      </div>
+      <p class="dim" style="margin-top:10px">Или создайте новый список — код появится после создания:</p>
+      <div class="row" style="margin-top:8px">
+        <input type="text" id="newTitle" class="grow" placeholder="Название списка">
+        <button class="ghost" onclick="createList()">Создать</button>
+      </div>
+    </div>
+    <div id="myLists"></div>
+  </div>
+
+  <!-- открытый список -->
+  <div id="list" style="display:none">
+    <div class="top">
+      <div class="row">
+        <button class="ghost" onclick="closeList()">←</button>
+        <h1 class="grow" id="listTitle" style="margin:0"></h1>
+        <button class="ghost" onclick="share()">Пригласить</button>
+      </div>
+      <p class="dim">Код списка: <span class="code" id="listCode"></span> — по нему входят с телефона (👥 → По коду) и с компьютера</p>
+    </div>
+    <div class="card" id="items"></div>
+    <div class="row" style="margin-top:12px">
+      <input type="text" id="newItem" class="grow" placeholder="Новый пункт…" onkeydown="if(event.key==='Enter')addItem()">
+      <button onclick="addItem()">＋</button>
+    </div>
+  </div>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getDatabase, ref, onValue, push, set, update, remove, get }
+    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+  const db = getDatabase(initializeApp({
+    apiKey: "AIzaSyB139PGLC2e8c8wNrZu5EFRwWDi-3RQaCE",
+    projectId: "notes-shared-6503f",
+    databaseURL: "https://notes-shared-6503f-default-rtdb.europe-west1.firebasedatabase.app",
+  }));
+
+  const $ = id => document.getElementById(id);
+  const ALPH = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  let current = null, unsub = null;
+
+  const myLists = () => JSON.parse(localStorage.getItem("notesLists") || "[]");
+  const saveLists = l => localStorage.setItem("notesLists", JSON.stringify(l));
+
+  function toast(t) {
+    const el = $("toast"); el.textContent = t; el.style.display = "block";
+    setTimeout(() => el.style.display = "none", 2500);
+  }
+
+  function renderHome() {
+    const box = $("myLists");
+    const lists = myLists();
+    box.innerHTML = lists.length ? "<p class='dim' style='margin:14px 0 4px'>Мои списки:</p>" : "";
+    lists.forEach(l => {
+      const d = document.createElement("div");
+      d.className = "card listlink";
+      d.innerHTML = `<b>${esc(l.title)}</b> <span class="dim">· ${l.code}</span>`;
+      d.onclick = () => openList(l.code, l.title);
+      box.appendChild(d);
+    });
+  }
+
+  const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  async function join() {
+    const code = $("codeInput").value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!code) return;
+    const snap = await get(ref(db, `projects/${code}/info`));
+    const title = snap.child("title").val();
+    if (!title) { toast("Список с таким кодом не найден"); return; }
+    if (!myLists().some(l => l.code === code)) { const l = myLists(); l.push({ code, title }); saveLists(l); }
+    openList(code, title);
+  }
+
+  async function createList() {
+    const title = $("newTitle").value.trim();
+    if (!title) return;
+    const code = Array.from({ length: 8 }, () => ALPH[Math.floor(Math.random() * ALPH.length)]).join("");
+    await set(ref(db, `projects/${code}/info`), { title, created: Date.now() });
+    const l = myLists(); l.push({ code, title }); saveLists(l);
+    openList(code, title);
+  }
+
+  function openList(code, title) {
+    current = code;
+    $("home").style.display = "none";
+    $("list").style.display = "block";
+    $("listTitle").textContent = title;
+    $("listCode").textContent = code;
+    history.replaceState(null, "", "?code=" + code);
+    if (unsub) unsub();
+    unsub = onValue(ref(db, `projects/${code}/items`), snap => {
+      const items = [];
+      snap.forEach(c => items.push({ id: c.key, ...c.val() }));
+      items.sort((a, b) => (a.checked - b.checked) || (a.updated - b.updated));
+      const box = $("items");
+      box.innerHTML = items.length ? "" : "<p class='dim'>Пусто — добавьте первый пункт внизу.</p>";
+      items.forEach(it => {
+        const d = document.createElement("div");
+        d.className = "item" + (it.checked ? " done" : "");
+        d.innerHTML = `<span class="box">${it.checked ? "✓" : ""}</span><span class="txt">${esc(it.text)}</span><button class="del">✕</button>`;
+        d.onclick = () => update(ref(db, `projects/${code}/items/${it.id}`), { checked: !it.checked, updated: Date.now() });
+        d.querySelector(".del").onclick = e => { e.stopPropagation(); remove(ref(db, `projects/${code}/items/${it.id}`)); };
+        box.appendChild(d);
+      });
+    });
+  }
+
+  function addItem() {
+    const t = $("newItem").value.trim();
+    if (!t || !current) return;
+    push(ref(db, `projects/${current}/items`), { text: t, checked: false, updated: Date.now() });
+    $("newItem").value = "";
+  }
+
+  function share() {
+    const url = location.origin + location.pathname + "?code=" + current;
+    navigator.clipboard?.writeText(url).then(() => toast("Ссылка скопирована"), () => prompt("Скопируйте ссылку:", url));
+  }
+
+  function closeList() {
+    if (unsub) { unsub(); unsub = null; }
+    current = null;
+    $("list").style.display = "none";
+    $("home").style.display = "block";
+    history.replaceState(null, "", location.pathname);
+    renderHome();
+  }
+
+  // вход по ссылке ?code=
+  const q = new URLSearchParams(location.search).get("code");
+  renderHome();
+  if (q) { $("codeInput").value = q; join(); }
+
+  window.join = join; window.createList = createList; window.addItem = addItem;
+  window.share = share; window.closeList = closeList;
+</script>
+</body>
+</html>
