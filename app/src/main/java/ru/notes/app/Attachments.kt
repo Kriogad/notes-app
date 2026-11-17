@@ -43,6 +43,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.MaterialTheme
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
@@ -201,7 +203,7 @@ fun PhotoViewer(a: Attachment, onClose: () -> Unit) {
                 modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
             ) {
                 androidx.compose.material3.Icon(
-                    androidx.compose.material.icons.Icons.Filled.Close, "Закрыть",
+                    Icons.Filled.Close, "Закрыть",
                     tint = Color.White,
                 )
             }
