@@ -117,7 +117,8 @@ fun SharedScreen(host: Host, onBack: () -> Unit, onOpen: (String) -> Unit) {
                                     .setType("text/plain")
                                     .putExtra(android.content.Intent.EXTRA_TEXT,
                                         "Присоединяйся к списку «${p.title}» в приложении «Заметки» — код: ${p.code}\n" +
-                                            "(в приложении: Общие списки → По коду)")
+                                            "(в приложении: Общие списки → По коду)\n" +
+                                            "На компьютере: https://kriogad.github.io/notes-app/?code=${p.code}")
                                 ctx.startActivity(android.content.Intent.createChooser(send, "Пригласить"))
                             }) { Icon(Icons.Filled.Share, "Пригласить") }
                         }
@@ -176,14 +177,15 @@ fun SharedScreen(host: Host, onBack: () -> Unit, onOpen: (String) -> Unit) {
         AlertDialog(
             onDismissRequest = { created = null },
             title = { Text("Список «${p.title}» создан") },
-            text = { Text("Код для приглашения:\n\n${p.code}\n\nОтправьте его тому, с кем делитесь списком.") },
+            text = { Text("Код для приглашения:\n\n${p.code}\n\nОтправьте его тому, с кем делитесь списком.\n\nНа компьютере список открывается по ссылке:\nhttps://kriogad.github.io/notes-app/?code=${p.code}") },
             confirmButton = {
                 TextButton(onClick = {
                     val send = android.content.Intent(android.content.Intent.ACTION_SEND)
                         .setType("text/plain")
                         .putExtra(android.content.Intent.EXTRA_TEXT,
                             "Присоединяйся к списку «${p.title}» в приложении «Заметки» — код: ${p.code}\n" +
-                                "(в приложении: Общие списки → По коду)")
+                                "(в приложении: Общие списки → По коду)\n" +
+                                "На компьютере: https://kriogad.github.io/notes-app/?code=${p.code}")
                     ctx.startActivity(android.content.Intent.createChooser(send, "Пригласить"))
                     created = null
                 }) { Text("Отправить код") }
