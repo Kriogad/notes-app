@@ -593,6 +593,7 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
     var pickedTime by remember { mutableStateOf<Long?>(null) }
     var askDelete by remember { mutableStateOf(false) }
     var attachMenu by remember { mutableStateOf(false) }
+    var viewing by remember { mutableStateOf<Attachment?>(null) } // фото на весь экран
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val onPicked: (List<android.net.Uri>) -> Unit = { uris ->
@@ -743,7 +744,7 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
             ) {
                 images.forEach { a ->
                     Box {
-                        Thumb(a, 110.dp) { Attachments.open(ctx, a) }
+                        Thumb(a, 110.dp) { viewing = a }
                         IconButton(onClick = { remove(a) }, modifier = Modifier.align(Alignment.TopEnd).size(32.dp)) {
                             Icon(Icons.Filled.Close, "Убрать фото", tint = Color.White)
                         }
@@ -817,6 +818,8 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
         },
         dismissButton = { TextButton(onClick = { askDelete = false }) { Text("Отмена") } },
     )
+    // Фото — на весь экран внутри приложения
+    viewing?.let { PhotoViewer(it) { viewing = null } }
     if (pickDate) DayDialog(
         initial = targetAt,
         onDismiss = { pickDate = false },
