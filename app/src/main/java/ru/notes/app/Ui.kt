@@ -53,6 +53,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.input.KeyboardType
@@ -254,7 +255,7 @@ private fun ListScreen(
         topBar = {
             TopAppBar(
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = if (bg != null) 0.85f else 1f)
+                    containerColor = MaterialTheme.colorScheme.background.copy(alpha = if (bg != null) 0.85f else 1f)
                 ),
                 title = {
                     if (searching) {
@@ -262,7 +263,7 @@ private fun ListScreen(
                         LaunchedEffect(Unit) { focus.requestFocus() }
                         PlainField(query, { query = it }, "Поиск", MaterialTheme.typography.titleMedium,
                             Modifier.fillMaxWidth().focusRequester(focus))
-                    } else Text("Заметки")
+                    }
                 },
                 navigationIcon = {
                     if (searching) IconButton(onClick = { searching = false; query = "" }) {
@@ -285,7 +286,12 @@ private fun ListScreen(
         },
         floatingActionButton = {
             if (!searching && pager.currentPage != 2) {
-                FloatingActionButton(onClick = onNew) { Icon(Icons.Filled.Add, "Новая заметка") }
+                FloatingActionButton(
+                    onClick = onNew,
+                    shape = androidx.compose.foundation.shape.CircleShape,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ) { Icon(Icons.Filled.Add, "Новая заметка") }
             }
         },
     ) { pad ->
@@ -296,15 +302,16 @@ private fun ListScreen(
                 Modifier.padding(pad), host, onOpen)
         } else {
             Column(Modifier.padding(pad)) {
-                PrimaryTabRow(selectedTabIndex = pager.currentPage, containerColor = Color.Transparent) {
-                    tabs.forEachIndexed { i, (title, list) ->
-                        Tab(
-                            selected = pager.currentPage == i,
-                            onClick = { tabScope.launch { pager.animateScrollToPage(i) } },
-                            text = { Text("$title (${list.size})", maxLines = 1) },
-                        )
-                    }
-                }
+                Text(
+                    "Заметки",
+                    style = MaterialTheme.typography.displayLarge,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                )
+                SegmentedTabs(
+                    tabs = tabs.map { "${it.first} (${it.second.size})" },
+                    selected = pager.currentPage,
+                    onSelect = { tabScope.launch { pager.animateScrollToPage(it) } },
+                )
                 HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
                     NoteList(
                         tabs[page].second,
@@ -319,6 +326,38 @@ private fun ListScreen(
             }
         }
     }
+    }
+}
+
+/** Переключатель-сегменты, как на iPhone. */
+@Composable
+fun SegmentedTabs(tabs: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(2.dp),
+    ) {
+        tabs.forEachIndexed { i, t ->
+            val sel = i == selected
+            Box(
+                Modifier.weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (sel) MaterialTheme.colorScheme.surface else Color.Transparent)
+                    .clickable { onSelect(i) }
+                    .padding(vertical = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    t,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (sel) androidx.compose.ui.text.font.FontWeight.SemiBold
+                        else androidx.compose.ui.text.font.FontWeight.Normal,
+                    color = if (sel) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
     }
 }
 
@@ -359,8 +398,8 @@ private fun NoteList(list: List<Note>, empty: String, modifier: Modifier, host: 
         LazyColumn(
             Modifier.fillMaxSize(),
             state = listState,
-            contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 88.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 88.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             items(shown, key = { it.id }) { note ->
                 val isDragged = dragging == note.id
@@ -419,9 +458,16 @@ fun NoteCard(
     val isVault = store === Vault
     var revealed by remember(note.id) { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<Attachment?>(null) } // фото на весь экран
-    Card(onClick = onClick, modifier = modifier.fillMaxWidth()) {
+    Card(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface),
+        elevation = androidx.compose.material3.CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
         Row(Modifier.padding(end = 12.dp, top = 4.dp, bottom = 8.dp)) {
-            Checkbox(checked = note.done, onCheckedChange = { store.setDone(note.id, it) })
+            CircleCheck(checked = note.done, onToggle = { store.setDone(note.id, it) })
             Column(Modifier.weight(1f).padding(top = 12.dp).alpha(if (note.done) 0.6f else 1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -524,6 +570,28 @@ fun NoteCard(
     }
     // Фото — на весь экран внутри приложения
     viewing?.let { PhotoViewer(it) { viewing = null } }
+}
+
+/** Круглая галочка, как в iOS-напоминаниях. */
+@Composable
+fun CircleCheck(checked: Boolean, onToggle: (Boolean) -> Unit, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Box(modifier.size(48.dp).clickable { onToggle(!checked) }, contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.size(24.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(if (checked) cs.primary else Color.Transparent)
+                .border(2.dp, if (checked) cs.primary else cs.outlineVariant,
+                    androidx.compose.foundation.shape.CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (checked) Text(
+                "✓", color = cs.onPrimary,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+            )
+        }
+    }
 }
 
 /** Быстрое добавление пунктов с главного экрана: вписал → Enter → следующий; или голосом. */

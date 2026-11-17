@@ -58,16 +58,9 @@ class RingActivity : ComponentActivity() {
         val content = Notes.get(noteId)?.let { Reminders.contentOf(it, itemId) }
 
         setContent {
-            val dark = isSystemInDarkTheme()
-            val ctx = LocalContext.current
-            val colors = when {
-                Build.VERSION.SDK_INT >= 31 -> if (dark) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
-                dark -> darkColorScheme()
-                else -> lightColorScheme()
-            }
             // Свайп/кнопка «назад»: звук выключаем, уведомление остаётся в шторке
             BackHandler { stopSound() }
-            MaterialTheme(colorScheme = colors) {
+            NotesTheme {
                 Surface(Modifier.fillMaxSize()) {
                     Column(
                         Modifier.fillMaxSize().padding(24.dp),

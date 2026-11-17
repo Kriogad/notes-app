@@ -114,14 +114,7 @@ class MainActivity : ComponentActivity(), Host {
         enableEdgeToEdge()
         if (savedInstanceState == null) handle(intent)
         setContent {
-            val dark = isSystemInDarkTheme()
-            val ctx = LocalContext.current
-            val colors = when {
-                Build.VERSION.SDK_INT >= 31 -> if (dark) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
-                dark -> darkColorScheme()
-                else -> lightColorScheme()
-            }
-            MaterialTheme(colorScheme = colors) {
+            NotesTheme {
                 NotesApp(this, openRequest, onOpenHandled = { openRequest = null })
                 CrashReport()
                 UpdateCheck()

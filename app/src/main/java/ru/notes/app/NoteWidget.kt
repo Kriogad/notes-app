@@ -252,15 +252,7 @@ class NoteWidgetConfig : ComponentActivity() {
         if (widgetId == AppWidgetManager.INVALID_APPWIDGET_ID) { finish(); return }
         enableEdgeToEdge()
         setContent {
-            val dark = isSystemInDarkTheme()
-            val ctx = LocalContext.current
-            val colors = when {
-                android.os.Build.VERSION.SDK_INT >= 31 ->
-                    if (dark) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
-                dark -> darkColorScheme()
-                else -> lightColorScheme()
-            }
-            MaterialTheme(colorScheme = colors) {
+            NotesTheme {
                 val notes by Notes.notes.collectAsState()
                 Scaffold(topBar = { TopAppBar(title = { Text("Заметка для виджета") }) }) { pad ->
                     LazyColumn(
