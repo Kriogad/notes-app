@@ -208,7 +208,11 @@ fun PhotoViewer(a: Attachment, onClose: () -> Unit) {
         }
     }
 }
-    val ctx = androidx.compose.ui.platform.LocalContext.current
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+fun Thumb(a: Attachment, size: Dp, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, onLongClick: (() -> Unit)? = null) {
+    val ctx = LocalContext.current
     val bmp by produceState<ImageBitmap?>(null, a.file) {
         value = withContext(Dispatchers.IO) { Attachments.thumbnail(ctx, a, 400) }
     }
