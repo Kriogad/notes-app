@@ -87,6 +87,7 @@ class App : Application() {
         Backup.init(this)
         Notes.init(this)
         Shared.init(this)
+        Sync.init(this)
         Reminders.createChannel(this)
     }
 }
@@ -226,6 +227,7 @@ object Notes : NoteStore {
         refreshWidgets()
         Pinned.refresh(app)
         Backup.schedule(app)
+        Sync.onNotesChanged()
     }
 
     private fun load(): List<Note> {

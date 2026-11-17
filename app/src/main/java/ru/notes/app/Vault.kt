@@ -160,6 +160,16 @@ object Vault : NoteStore {
         disableBio()
     }
 
+    /**
+     * Файл заменён синхронизацией: если раздел был открыт, переоткрываем тем же ключом.
+     * Если на другом устройстве сменили пароль — ключ не подойдёт, раздел просто закроется.
+     * Отпечаток продолжает работать (ключ раздела тот же, пока пароль не меняли).
+     */
+    fun reloadFromSync() {
+        val k = key ?: return // закрыт — откроется новым файлом при следующем входе
+        if (!open(k)) lock()
+    }
+
     private fun open(k: SecretKey): Boolean = try {
         val o = JSONObject(file.readText())
         val c = Cipher.getInstance("AES/GCM/NoPadding")
@@ -283,6 +293,7 @@ object Vault : NoteStore {
         val tmp = File(file.path + ".tmp")
         tmp.writeText(o.toString())
         tmp.renameTo(file)
+        Sync.onVaultChanged()
     }
 
     private fun derive(password: String, salt: ByteArray): SecretKey {

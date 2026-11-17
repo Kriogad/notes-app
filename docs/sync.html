@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Заметки — синхронизация</title>
+<style>
+  :root { --bg:#111318; --card:#1d2027; --field:#262a33; --text:#e8eaf0; --dim:#9aa0ad; --accent:#8ab4f8; --danger:#f28b82; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, sans-serif; min-height: 100vh; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 12px 0 4px; }
+  .dim { color: var(--dim); }
+  .card { background: var(--card); border-radius: 14px; padding: 14px 16px; margin: 8px 0; }
+  input[type=text], input[type=password], textarea { width: 100%; background: var(--field); color: var(--text); border: none; border-radius: 10px; padding: 12px 14px; font-size: 16px; outline: none; font-family: inherit; }
+  input:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
+  textarea { min-height: 120px; resize: vertical; }
+  button { background: var(--accent); color: #111; border: none; border-radius: 10px; padding: 12px 18px; font-size: 16px; font-weight: 600; cursor: pointer; }
+  button.ghost { background: var(--field); color: var(--text); font-weight: 400; }
+  button.mini { padding: 6px 12px; font-size: 14px; }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .grow { flex: 1; }
+  .code { font-size: 22px; letter-spacing: 3px; font-weight: 700; color: var(--accent); }
+  .top { position: sticky; top: 0; background: var(--bg); padding-top: 8px; z-index: 2; }
+  a { color: var(--accent); }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--card); padding: 10px 18px; border-radius: 10px; display: none; z-index: 5; }
+  .tabs { display: flex; gap: 8px; margin: 14px 0 10px; }
+  .tabs button { flex: 1; background: var(--field); color: var(--text); font-weight: 400; }
+  .tabs button.on { background: var(--accent); color: #111; font-weight: 600; }
+  .note { cursor: pointer; }
+  .note:hover { border: 1px solid var(--accent); }
+  .note .nt { font-weight: 600; }
+  .note .np { color: var(--dim); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .note.done .nt { text-decoration: line-through; color: var(--dim); }
+  .chk { display: flex; align-items: center; gap: 8px; padding: 6px 0; cursor: pointer; user-select: none; }
+  .chk .box { width: 20px; height: 20px; border: 2px solid var(--dim); border-radius: 6px; flex: none; display: grid; place-items: center; font-size: 13px; color: #111; }
+  .chk.done .box { background: var(--accent); border-color: var(--accent); }
+  .chk.done .txt { text-decoration: line-through; color: var(--dim); }
+  .chk .del { margin-left: auto; color: var(--dim); background: none; padding: 2px 8px; font-size: 16px; }
+  .chk .del:hover { color: var(--danger); }
+  .edItem { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+  .edItem input { flex: 1; }
+  .cat { margin: 18px 0 6px; color: var(--accent); font-weight: 600; }
+  .copy { background: none; color: var(--dim); padding: 2px 8px; font-size: 14px; }
+  .copy:hover { color: var(--accent); }
+  .vtext { white-space: pre-wrap; word-break: break-word; }
+  .vdel { color: var(--dim); background: none; padding: 4px 8px; font-size: 16px; }
+  .vdel:hover { color: var(--danger); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- вход по коду -->
+  <div id="home">
+    <h1>📝 Заметки — синхронизация с телефоном</h1>
+    <p class="dim">Веб-версия приложения «Заметки». Введите код синхронизации из настроек телефона
+      (Настройки → Синхронизация с компьютером) — заметки появятся здесь и будут совпадать с телефоном.</p>
+    <div class="card">
+      <div class="row">
+        <input type="text" id="codeInput" class="grow" placeholder="Код синхронизации" maxlength="16" style="text-transform:uppercase">
+        <button onclick="connect()">Войти</button>
+      </div>
+    </div>
+    <p class="dim"><a href="index.html">Общие списки →</a></p>
+  </div>
+
+  <!-- основной экран -->
+  <div id="main" style="display:none">
+    <div class="top">
+      <div class="row">
+        <h1 class="grow" style="margin:0">📝 Мои заметки</h1>
+        <button class="ghost mini" onclick="disconnect()">Выйти</button>
+      </div>
+      <p class="dim">Код: <span class="code" id="syncCode"></span></p>
+      <div class="tabs">
+        <button id="tabNotes" class="on" onclick="showTab('notes')">Заметки</button>
+        <button id="tabVault" onclick="showTab('vault')">🔒 Секретка</button>
+      </div>
+    </div>
+
+    <!-- обычные заметки -->
+    <div id="paneNotes">
+      <div id="notesList"></div>
+      <button style="width:100%; margin-top:10px" onclick="newNote()">＋ Новая заметка</button>
+
+      <!-- редактор -->
+      <div id="editor" style="display:none" class="card">
+        <input type="text" id="edTitle" placeholder="Название" oninput="scheduleSave()">
+        <textarea id="edText" placeholder="Текст заметки…" style="margin-top:10px" oninput="scheduleSave()"></textarea>
+        <div id="edItems" style="margin-top:8px"></div>
+        <div class="row" style="margin-top:8px">
+          <input type="text" id="edNewItem" class="grow" placeholder="Новый пункт…" onkeydown="if(event.key==='Enter')addItem()">
+          <button class="ghost mini" onclick="addItem()">＋</button>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="ghost mini grow" id="edDoneBtn" onclick="toggleDone()">Выполнена</button>
+          <button class="ghost mini" onclick="closeEditor()">Закрыть</button>
+          <button class="ghost mini vdel" onclick="deleteNote()">Удалить</button>
+        </div>
+        <p class="dim" id="edStatus" style="margin-top:8px; font-size:13px"></p>
+      </div>
+    </div>
+
+    <!-- секретка -->
+    <div id="paneVault" style="display:none">
+      <div id="vaultLocked">
+        <div class="card">
+          <p class="dim" id="vaultHint"></p>
+          <div class="row" style="margin-top:8px">
+            <input type="password" id="vaultPass" class="grow" placeholder="Пароль секретного раздела"
+                   onkeydown="if(event.key==='Enter')unlockVault()">
+            <button onclick="unlockVault()">Открыть</button>
+          </div>
+          <p class="dim" style="margin-top:10px; font-size:13px">Пароль никуда не отправляется — расшифровка происходит в вашем браузере. Редактирование секретки — только с телефона.</p>
+        </div>
+      </div>
+      <div id="vaultOpen" style="display:none">
+        <div class="row" style="margin-bottom:8px">
+          <p class="dim grow">Открыто. Не оставляйте вкладку без присмотра.</p>
+          <button class="ghost mini" onclick="lockVault()">Закрыть</button>
+        </div>
+        <div id="vaultList"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getDatabase, ref, onValue, set, remove, get }
+    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+  const db = getDatabase(initializeApp({
+    apiKey: "AIzaSyB139PGLC2e8c8wNrZu5EFRwWDi-3RQaCE",
+    projectId: "notes-shared-6503f",
+    databaseURL: "https://notes-shared-6503f-default-rtdb.europe-west1.firebasedatabase.app",
+  }));
+
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  let code = null, notes = {}, notesRaw = {}, vaultRaw = null, unsubNotes = null, unsubVault = null;
+  let editing = null, saveTimer = null, applyingRemote = false;
+
+  function toast(t) {
+    const el = $("toast"); el.textContent = t; el.style.display = "block";
+    setTimeout(() => el.style.display = "none", 2500);
+  }
+
+  // ---------- вход ----------
+
+  async function connect() {
+    const c = $("codeInput").value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (c.length < 6) { toast("Код коротковат — посмотрите в настройках телефона"); return; }
+    code = c;
+    localStorage.setItem("notesSyncCode", c);
+    history.replaceState(null, "", "?code=" + c);
+    $("home").style.display = "none";
+    $("main").style.display = "block";
+    $("syncCode").textContent = c;
+    subscribe();
+  }
+
+  function disconnect() {
+    if (unsubNotes) unsubNotes();
+    if (unsubVault) unsubVault();
+    code = null; notes = {}; notesRaw = {}; vaultRaw = null; editing = null;
+    localStorage.removeItem("notesSyncCode");
+    history.replaceState(null, "", location.pathname);
+    $("main").style.display = "none";
+    $("home").style.display = "block";
+  }
+
+  function subscribe() {
+    unsubNotes = onValue(ref(db, `sync/${code}/notes`), snap => {
+      notes = {}; notesRaw = {};
+      snap.forEach(c => {
+        const v = c.val();
+        if (!v || !v.j) return;
+        try { notes[c.key] = JSON.parse(v.j); notesRaw[c.key] = v.j; } catch (e) {}
+      });
+      renderNotes();
+      if (editing && notes[editing] && !saveTimer) fillEditor(notes[editing]);
+    });
+    unsubVault = onValue(ref(db, `sync/${code}/vault`), snap => {
+      const wasOpen = $("vaultOpen").style.display === "block";
+      vaultRaw = snap.val()?.j ?? null;
+      if (wasOpen) { lockVault(); toast("Секретка изменилась — откройте заново"); }
+      renderVaultHint();
+    });
+  }
+
+  // ---------- заметки ----------
+
+  function sortedNotes() {
+    return Object.values(notes).sort((a, b) =>
+      ((a.done ? 1 : 0) - (b.done ? 1 : 0)) ||
+      ((a.pos ?? 9e15) - (b.pos ?? 9e15)) ||
+      ((b.updated ?? 0) - (a.updated ?? 0)));
+  }
+
+  function renderNotes() {
+    const box = $("notesList");
+    const list = sortedNotes();
+    box.innerHTML = list.length ? "" : "<p class='dim' style='margin-top:10px'>Пока пусто. Создайте заметку здесь или на телефоне.</p>";
+    list.forEach(n => {
+      const d = document.createElement("div");
+      d.className = "card note" + (n.done ? " done" : "");
+      const items = (n.items || []).filter(i => i.t);
+      const preview = n.text || items.map(i => (i.c ? "✓ " : "· ") + i.t).join("  ");
+      d.innerHTML = `<div class="nt">${esc(n.title || firstLine(n) || "Без названия")}</div>` +
+        (preview ? `<div class="np">${esc(preview)}</div>` : "");
+      d.onclick = () => openEditor(String(n.id));
+      box.appendChild(d);
+    });
+  }
+
+  const firstLine = n => (n.text || "").split("\n").find(l => l.trim()) || (n.items || []).find(i => i.t)?.t || "";
+
+  function openEditor(id) {
+    editing = id;
+    $("editor").style.display = "block";
+    fillEditor(notes[id]);
+    $("editor").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function fillEditor(n) {
+    if (!n) return;
+    applyingRemote = true;
+    $("edTitle").value = n.title || "";
+    $("edText").value = n.text || "";
+    $("edDoneBtn").textContent = n.done ? "Вернуть в работу" : "Выполнена";
+    const box = $("edItems");
+    box.innerHTML = "";
+    (n.items || []).forEach((it, idx) => {
+      const row = document.createElement("div");
+      row.className = "chk" + (it.c ? " done" : "");
+      row.innerHTML = `<span class="box">${it.c ? "✓" : ""}</span><span class="txt">${esc(it.t)}</span><button class="del">✕</button>`;
+      row.onclick = () => { it.c = !it.c; saveNow(); };
+      row.querySelector(".del").onclick = e => { e.stopPropagation(); notes[editing].items.splice(idx, 1); saveNow(); };
+      box.appendChild(row);
+    });
+    applyingRemote = false;
+  }
+
+  function closeEditor() { editing = null; $("editor").style.display = "none"; }
+
+  function newNote() {
+    const n = { id: Date.now(), title: "", text: "", items: [], done: false, updated: Date.now() };
+    notes[String(n.id)] = n;
+    saveNote(n);
+    openEditor(String(n.id));
+  }
+
+  function addItem() {
+    const t = $("edNewItem").value.trim();
+    if (!t || !editing) return;
+    const n = notes[editing];
+    n.items = n.items || [];
+    n.items.push({ t, c: false, i: Date.now() });
+    $("edNewItem").value = "";
+    saveNow();
+  }
+
+  function toggleDone() {
+    if (!editing) return;
+    notes[editing].done = !notes[editing].done;
+    saveNow();
+  }
+
+  async function deleteNote() {
+    if (!editing) return;
+    if (!confirm("Удалить заметку? На телефоне она тоже удалится.")) return;
+    const id = editing;
+    closeEditor();
+    await remove(ref(db, `sync/${code}/notes/${id}`));
+    await set(ref(db, `sync/${code}/deleted/${id}`), Date.now());
+    toast("Удалено");
+  }
+
+  function scheduleSave() {
+    if (applyingRemote || !editing) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveFromFields, 800);
+    $("edStatus").textContent = "Сохраняю…";
+  }
+
+  function saveFromFields() {
+    if (!editing) return;
+    const n = notes[editing];
+    n.title = $("edTitle").value;
+    n.text = $("edText").value;
+    saveNote(n);
+  }
+
+  function saveNow() {
+    clearTimeout(saveTimer); saveTimer = null;
+    if (editing) saveFromFields();
+  }
+
+  async function saveNote(n) {
+    n.updated = Date.now();
+    await set(ref(db, `sync/${code}/notes/${n.id}`), { j: JSON.stringify(n), u: n.updated });
+    $("edStatus").textContent = "Сохранено " + new Date().toLocaleTimeString("ru-RU");
+    renderNotes();
+  }
+
+  // ---------- секретка ----------
+
+  function renderVaultHint() {
+    if (!vaultRaw) {
+      $("vaultHint").textContent = "Секретка ещё не синхронизирована — откройте секретный раздел на телефоне, и он появится здесь.";
+      $("vaultPass").disabled = true;
+      return;
+    }
+    $("vaultPass").disabled = false;
+    let hint = "";
+    try { hint = JSON.parse(vaultRaw).hint || ""; } catch (e) {}
+    $("vaultHint").textContent = hint ? "Подсказка: " + hint : "Введите пароль секретного раздела.";
+  }
+
+  const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+  async function unlockVault() {
+    const pass = $("vaultPass").value;
+    if (!pass || !vaultRaw) return;
+    try {
+      const o = JSON.parse(vaultRaw);
+      const km = await crypto.subtle.importKey("raw", new TextEncoder().encode(pass), "PBKDF2", false, ["deriveKey"]);
+      const key = await crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt: b64(o.salt), iterations: 200000, hash: "SHA-256" },
+        km, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+      const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(o.iv) }, key, b64(o.data));
+      const arr = JSON.parse(new TextDecoder().decode(plain));
+      $("vaultPass").value = "";
+      renderVault(arr);
+      $("vaultLocked").style.display = "none";
+      $("vaultOpen").style.display = "block";
+    } catch (e) {
+      toast("Не подошло — проверьте пароль");
+    }
+  }
+
+  function lockVault() {
+    $("vaultOpen").style.display = "none";
+    $("vaultLocked").style.display = "block";
+    $("vaultList").innerHTML = "";
+  }
+
+  function renderVault(arr) {
+    const box = $("vaultList");
+    box.innerHTML = arr.length ? "" : "<p class='dim'>Секретный раздел пуст.</p>";
+    arr.sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0));
+    const cats = new Map();
+    arr.forEach(n => {
+      const c = n.cat || "";
+      if (!cats.has(c)) cats.set(c, []);
+      cats.get(c).push(n);
+    });
+    [...cats.keys()].sort((a, b) => (a === "") - (b === "") || a.localeCompare(b, "ru")).forEach(cat => {
+      if (cat) {
+        const h = document.createElement("div");
+        h.className = "cat";
+        h.textContent = cat;
+        box.appendChild(h);
+      }
+      cats.get(cat).forEach(n => {
+        const d = document.createElement("div");
+        d.className = "card";
+        let html = `<div class="nt" style="font-weight:600">${esc(n.title || "Без названия")}</div>`;
+        if (n.text) html += `<div class="vtext" style="margin-top:6px">${esc(n.text)}</div>`;
+        (n.items || []).forEach(it => {
+          html += `<div class="row" style="margin-top:4px"><span class="vtext grow">${it.c ? "✓ " : ""}${esc(it.t)}</span>` +
+            `<button class="copy" data-v="${esc(it.t)}">копировать</button></div>`;
+        });
+        if (n.text) html += `<button class="copy" data-v="${esc(n.text)}" style="margin-top:6px">копировать текст</button>`;
+        d.innerHTML = html;
+        d.querySelectorAll(".copy").forEach(b => b.onclick = () => {
+          navigator.clipboard?.writeText(b.dataset.v).then(() => toast("Скопировано"));
+        });
+        box.appendChild(d);
+      });
+    });
+  }
+
+  // ---------- вкладки ----------
+
+  function showTab(t) {
+    $("tabNotes").classList.toggle("on", t === "notes");
+    $("tabVault").classList.toggle("on", t === "vault");
+    $("paneNotes").style.display = t === "notes" ? "block" : "none";
+    $("paneVault").style.display = t === "vault" ? "block" : "none";
+    if (t === "vault") renderVaultHint();
+  }
+
+  // авто-вход по ссылке / сохранённому коду
+  const q = new URLSearchParams(location.search).get("code");
+  const saved = localStorage.getItem("notesSyncCode");
+  if (q || saved) { $("codeInput").value = q || saved; connect(); }
+
+  window.connect = connect; window.disconnect = disconnect; window.showTab = showTab;
+  window.newNote = newNote; window.addItem = addItem; window.toggleDone = toggleDone;
+  window.deleteNote = deleteNote; window.closeEditor = closeEditor; window.scheduleSave = scheduleSave;
+  window.unlockVault = unlockVault; window.lockVault = lockVault;
+</script>
+</body>
+</html>

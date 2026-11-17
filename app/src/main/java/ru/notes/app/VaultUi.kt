@@ -643,6 +643,70 @@ private fun RemindSettings(host: Host) {
     }
 }
 
+// ---------------- Настройки: синхронизация с компьютером ----------------
+
+@Composable
+fun SyncSettings() {
+    val ctx = LocalContext.current
+    val code by Sync.code.collectAsState()
+    val status by Sync.status.collectAsState()
+    var askCode by remember { mutableStateOf(false) }
+    var entered by remember { mutableStateOf("") }
+
+    Text("Синхронизация с компьютером", style = MaterialTheme.typography.titleMedium)
+    Text(
+        "Обычные заметки и секретка синхронизируются между телефоном и браузером на компьютере. " +
+            "Секретка передаётся только в зашифрованном виде — на компьютере она открывается вашим паролем.",
+        style = MaterialTheme.typography.bodyMedium,
+    )
+    if (!Sync.available) {
+        Text("Синхронизация не настроена в этой сборке (нет Firebase).", color = MaterialTheme.colorScheme.error)
+        return
+    }
+    val c = code
+    if (c == null) {
+        Button(onClick = {
+            if (Sync.enable(null) == null) Toast.makeText(ctx, "Нет соединения с облаком", Toast.LENGTH_LONG).show()
+        }, modifier = Modifier.fillMaxWidth()) { Text("Включить синхронизацию") }
+        TextButton(onClick = { askCode = true }) { Text("Ввести код с другого устройства") }
+    } else {
+        val url = "https://kriogad.github.io/notes-app/sync.html?code=$c"
+        Text("Код синхронизации:", style = MaterialTheme.typography.bodyMedium)
+        Text(c, style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.primary)
+        Text("На компьютере откройте:\n$url", style = MaterialTheme.typography.bodyMedium)
+        Button(onClick = {
+            val send = android.content.Intent(android.content.Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(android.content.Intent.EXTRA_TEXT,
+                    "Мои заметки на компьютере: $url\n(код синхронизации: $c)")
+            ctx.startActivity(android.content.Intent.createChooser(send, "Отправить ссылку"))
+        }, modifier = Modifier.fillMaxWidth()) { Text("Отправить ссылку себе") }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { askCode = true }) { Text("Другой код") }
+            TextButton(onClick = { Sync.disable() }) { Text("Выключить") }
+        }
+    }
+    if (status.isNotBlank()) Text(status, color = MaterialTheme.colorScheme.outline)
+
+    if (askCode) AlertDialog(
+        onDismissRequest = { askCode = false },
+        title = { Text("Код синхронизации") },
+        text = {
+            OutlinedTextField(entered, { entered = it.uppercase() },
+                label = { Text("Код с другого устройства") }, singleLine = true)
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val res = Sync.enable(entered)
+                if (res == null) Toast.makeText(ctx, "Код короткий или нет связи", Toast.LENGTH_LONG).show()
+                askCode = false
+                entered = ""
+            }) { Text("Подключить") }
+        },
+        dismissButton = { TextButton(onClick = { askCode = false; entered = "" }) { Text("Отмена") } },
+    )
+}
+
 // ---------------- Настройки: резервная копия ----------------
 
 @Composable
@@ -716,6 +780,9 @@ fun SettingsScreen(host: Host, onBack: () -> Unit) {
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
             RemindSettings(host)
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
+            SyncSettings()
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
             Text("Резервная копия на Яндекс Диске", style = MaterialTheme.typography.titleMedium)
