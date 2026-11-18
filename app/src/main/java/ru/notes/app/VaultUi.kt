@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -125,7 +126,7 @@ fun VaultScreen(host: Host, onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: (
                 actions = {
                     if (unlocked && !searching && tab == 0) {
                         IconButton(onClick = { searching = true }) {
-                            Icon(androidx.compose.material.icons.Icons.Filled.Search, "Поиск")
+                            Icon(Icons.Filled.Search, "Поиск")
                         }
                     }
                     if (unlocked) IconButton(onClick = onBack) { Icon(Icons.Filled.Lock, "Закрыть раздел") }

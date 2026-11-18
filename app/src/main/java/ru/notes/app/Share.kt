@@ -3,6 +3,7 @@ package ru.notes.app
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -97,13 +98,14 @@ object Share {
             val bodyPaint = android.graphics.Paint().apply { textSize = 14f; color = android.graphics.Color.BLACK }
             val dimPaint = android.graphics.Paint().apply { textSize = 11f; color = android.graphics.Color.GRAY }
             var pageNum = 1
-            var page = doc.startPage(android.graphics.pdf.PdfDocument.PageInfo.Builder(pageW, pageH, pageNum).build())
+            fun startPage() = doc.startPage(PdfDocument.PageInfo.Builder(pageW, pageH, pageNum).build())
+            var page = startPage()
             var y = margin
 
             fun newPage() {
                 doc.finishPage(page)
                 pageNum++
-                page = doc.startPage(android.graphics.pdf.PdfDocument.PageInfo.Builder(pageW, pageH, pageNum).build())
+                page = startPage()
                 y = margin
             }
 
