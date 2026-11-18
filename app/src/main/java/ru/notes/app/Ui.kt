@@ -221,23 +221,37 @@ private fun ListScreen(
     var searching by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     val archived = notes.filter { it.done }.sortedByDescending { it.doneAt ?: it.updated }
+    val trash by Notes.trash.collectAsState()
     var askClear by remember { mutableStateOf(false) }
+    var askClearTrash by remember { mutableStateOf(false) }
     if (askClear) AlertDialog(
         onDismissRequest = { askClear = false },
         title = { Text("Очистить архив?") },
-        text = { Text("Удалятся все выполненные заметки (${archived.size}) вместе с фото, включая историю повторяющихся.") },
+        text = { Text("Выполненные заметки (${archived.size}) уйдут в корзину, включая историю повторяющихся.") },
         confirmButton = {
-            TextButton(onClick = { archived.forEach { Notes.delete(it.id) }; askClear = false }) { Text("Удалить всё") }
+            TextButton(onClick = { archived.forEach { Notes.delete(it.id) }; askClear = false }) { Text("В корзину") }
         },
         dismissButton = { TextButton(onClick = { askClear = false }) { Text("Отмена") } },
     )
+    if (askClearTrash) AlertDialog(
+        onDismissRequest = { askClearTrash = false },
+        title = { Text("Очистить корзину?") },
+        text = { Text("Заметки (${trash.size}) и их фото удалятся навсегда, восстановить будет нельзя.") },
+        confirmButton = {
+            TextButton(onClick = { Notes.emptyTrash(); askClearTrash = false }) { Text("Удалить навсегда") }
+        },
+        dismissButton = { TextButton(onClick = { askClearTrash = false }) { Text("Отмена") } },
+    )
 
-    // Три экрана свайпом, как рабочие столы
+    // Экраны свайпом, как рабочие столы
+    var catFilter by rememberSaveable { mutableStateOf("") }
     val active = notes.filter { !it.done }
+    fun List<Note>.byCat() = if (catFilter.isBlank()) this else filter { it.category == catFilter }
     val tabs = listOf(
-        "Текучка" to active.filter { !it.isRecurring },
-        "Повторы" to active.filter { it.isRecurring },
-        "Архив" to archived,
+        "Текучка" to active.byCat().filter { !it.isRecurring },
+        "Повторы" to active.byCat().filter { it.isRecurring },
+        "Архив" to archived.byCat(),
+        "Корзина" to trash,
     )
     val pager = rememberPagerState { tabs.size }
     val tabScope = rememberCoroutineScope()
@@ -275,6 +289,9 @@ private fun ListScreen(
                         if (pager.currentPage == 2 && archived.isNotEmpty()) {
                             TextButton(onClick = { askClear = true }) { Text("Очистить") }
                         }
+                        if (pager.currentPage == 3 && trash.isNotEmpty()) {
+                            TextButton(onClick = { askClearTrash = true }) { Text("Очистить") }
+                        }
                         IconButton(onClick = { searching = true }) { Icon(Icons.Filled.Search, "Поиск") }
                         IconButton(onClick = onCalendar) { Icon(Icons.Filled.DateRange, "Календарь") }
                         IconButton(onClick = onShared) { Text("👥") }
@@ -285,7 +302,7 @@ private fun ListScreen(
             )
         },
         floatingActionButton = {
-            if (!searching && pager.currentPage != 2) {
+            if (!searching && pager.currentPage <= 1) {
                 FloatingActionButton(
                     onClick = onNew,
                     shape = androidx.compose.foundation.shape.CircleShape,
@@ -312,8 +329,32 @@ private fun ListScreen(
                     selected = pager.currentPage,
                     onSelect = { tabScope.launch { pager.animateScrollToPage(it) } },
                 )
+                // Фильтр по категориям — виден, только если категории есть
+                val cats = notes.map { it.category }.filter { it.isNotBlank() }.distinct().sorted()
+                if (cats.isNotEmpty()) {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 16.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        androidx.compose.material3.FilterChip(
+                            selected = catFilter.isEmpty(),
+                            onClick = { catFilter = "" },
+                            label = { Text("Все") },
+                        )
+                        cats.forEach { c ->
+                            androidx.compose.material3.FilterChip(
+                                selected = catFilter == c,
+                                onClick = { catFilter = if (catFilter == c) "" else c },
+                                label = { Text(c, maxLines = 1) },
+                            )
+                        }
+                    }
+                }
                 HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
-                    NoteList(
+                    if (page == 3) {
+                        TrashList(tabs[3].second, Modifier)
+                    } else NoteList(
                         tabs[page].second,
                         when (page) {
                             0 -> "Заметок пока нет.\nНажмите +, чтобы добавить."
@@ -370,8 +411,8 @@ private fun NoteList(list: List<Note>, empty: String, modifier: Modifier, host: 
         AlertDialog(
             onDismissRequest = { deleting = null },
             title = { Text("Удалить «${n.displayTitle}»?") },
-            text = { Text("Заметка и её фото удалятся совсем.") },
-            confirmButton = { TextButton(onClick = { Notes.delete(n.id); deleting = null }) { Text("Удалить") } },
+            text = { Text("Заметка уйдёт в корзину — ${Notes.TRASH_DAYS} дней её можно будет восстановить.") },
+            confirmButton = { TextButton(onClick = { Notes.delete(n.id); deleting = null }) { Text("В корзину") } },
             dismissButton = { TextButton(onClick = { deleting = null }) { Text("Отмена") } },
         )
     }
@@ -433,8 +474,99 @@ private fun NoteList(list: List<Note>, empty: String, modifier: Modifier, host: 
                 val m = (if (isDragged) Modifier.zIndex(1f).graphicsLayer {
                     translationY = dragOffset; scaleX = 1.03f; scaleY = 1.03f; shadowElevation = 16f
                 } else Modifier.animateItem()).then(drag)
-                NoteCard(note, Notes, m, maxItems, onAdd = { adding = note.id },
-                    onDelete = { deleting = note }) { onOpen(note.id) }
+                // Свайпы: влево — в корзину, вправо — выполнить/вернуть в работу
+                val dismissState = androidx.compose.material3.rememberSwipeToDismissBoxState(
+                    confirmValueChange = { v ->
+                        when (v) {
+                            androidx.compose.material3.SwipeToDismissBoxValue.EndToStart -> { Notes.delete(note.id); true }
+                            androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd -> { Notes.setDone(note.id, !note.done); true }
+                            else -> false
+                        }
+                    }
+                )
+                androidx.compose.material3.SwipeToDismissBox(
+                    state = dismissState,
+                    modifier = m,
+                    backgroundContent = {
+                        val toRight = dismissState.dismissDirection ==
+                            androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd
+                        Box(
+                            Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp))
+                                .background(if (toRight) Color(0xFF34C759) else MaterialTheme.colorScheme.error)
+                                .padding(horizontal = 24.dp),
+                            contentAlignment = if (toRight) Alignment.CenterStart else Alignment.CenterEnd,
+                        ) {
+                            Text(
+                                if (toRight) (if (note.done) "Вернуть" else "Готово ✓") else "В корзину 🗑",
+                                color = Color.White,
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                        }
+                    },
+                ) {
+                    NoteCard(note, Notes, Modifier, maxItems, onAdd = { adding = note.id },
+                        onDelete = { deleting = note }) { onOpen(note.id) }
+                }
+            }
+        }
+    }
+}
+
+/** Корзина: удалённые заметки с восстановлением. */
+@Composable
+private fun TrashList(list: List<Note>, modifier: Modifier) {
+    if (list.isEmpty()) {
+        Box(modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            Text("Корзина пуста.\nУдалённые заметки хранятся здесь ${Notes.TRASH_DAYS} дней.",
+                color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center)
+        }
+        return
+    }
+    var askForever by remember { mutableStateOf<Note?>(null) }
+    askForever?.let { n ->
+        AlertDialog(
+            onDismissRequest = { askForever = null },
+            title = { Text("Удалить навсегда?") },
+            text = { Text("«${n.displayTitle}» и её фото будут стёрты без возможности восстановления.") },
+            confirmButton = { TextButton(onClick = { Notes.deleteForever(n.id); askForever = null }) { Text("Удалить") } },
+            dismissButton = { TextButton(onClick = { askForever = null }) { Text("Отмена") } },
+        )
+    }
+    LazyColumn(
+        modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 88.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        item {
+            Text(
+                "Хранятся ${Notes.TRASH_DAYS} дней, потом удаляются сами",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+            )
+        }
+        items(list, key = { it.id }) { n ->
+            Card(
+                Modifier.fillMaxWidth().animateItem(),
+                shape = MaterialTheme.shapes.medium,
+                colors = androidx.compose.material3.CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface),
+                elevation = androidx.compose.material3.CardDefaults.cardElevation(defaultElevation = 0.dp),
+            ) {
+                Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(n.displayTitle, style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        n.deletedAt?.let {
+                            Text("Удалена " + formatTime(it), style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.outline)
+                        }
+                    }
+                    TextButton(onClick = { Notes.restore(n.id) }) { Text("Вернуть") }
+                    IconButton(onClick = { askForever = n }) {
+                        Icon(Icons.Filled.Delete, "Удалить навсегда", tint = MaterialTheme.colorScheme.error)
+                    }
+                }
             }
         }
     }
@@ -681,7 +813,8 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
         if (finished) return
         val stored = store.get(id)
         when {
-            note.isBlank -> if (stored != null) store.delete(id)
+            // Пустую заготовку выбрасываем мимо корзины, чтобы не мусорить
+            note.isBlank -> if (stored != null) { if (store === Notes) Notes.discard(id) else store.delete(id) }
             !note.sameContent(stored) -> store.upsert(note.copy(updated = System.currentTimeMillis()))
         }
     }
@@ -713,7 +846,21 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                     }
                     // Напоминание показало бы заголовок секретной заметки в уведомлении — там его нет
                     if (!secret) IconButton(onClick = { target = 0L; pickDate = true }) { Icon(Icons.Filled.Notifications, "Напоминание") }
-                    IconButton(onClick = { Share.send(ctx, note, secret) }) { Icon(Icons.Filled.Share, "Отправить") }
+                    var exportMenu by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { exportMenu = true }) { Icon(Icons.Filled.Share, "Отправить / экспорт") }
+                        DropdownMenu(expanded = exportMenu, onDismissRequest = { exportMenu = false }) {
+                            DropdownMenuItem(text = { Text("Отправить текстом") }, onClick = {
+                                exportMenu = false; Share.send(ctx, note, secret)
+                            })
+                            DropdownMenuItem(text = { Text("Экспорт в TXT") }, onClick = {
+                                exportMenu = false; Share.exportTxt(ctx, note)
+                            })
+                            DropdownMenuItem(text = { Text("Экспорт в PDF") }, onClick = {
+                                exportMenu = false; Share.exportPdf(ctx, note)
+                            })
+                        }
+                    }
                     IconButton(onClick = { askDelete = true }) { Icon(Icons.Filled.Delete, "Удалить") }
                 },
             )
@@ -725,8 +872,8 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
         ) {
             PlainField(note.title, { note = note.copy(title = it) }, "Заголовок", MaterialTheme.typography.titleLarge)
 
-            // Категория — только у секретных заметок («Пароли», «Контакты»…)
-            if (secret) {
+            // Категория («Пароли», «Контакты», «Дом»…)
+            run {
                 var catDialog by remember { mutableStateOf(false) }
                 Row(Modifier.padding(horizontal = 4.dp)) {
                     AssistChip(
@@ -884,6 +1031,10 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
     if (askDelete) AlertDialog(
         onDismissRequest = { askDelete = false },
         title = { Text("Удалить заметку?") },
+        text = {
+            Text(if (secret) "Секретная заметка удалится навсегда."
+                else "Заметка уйдёт в корзину — ${Notes.TRASH_DAYS} дней её можно будет восстановить.")
+        },
         confirmButton = {
             TextButton(onClick = { note = Note(id); store.delete(id); onClose() }) { Text("Удалить") }
         },

@@ -56,6 +56,8 @@ data class Note(
     val reading: Double? = null,
     /** Категория (в секретном разделе: «Пароли», «Контакты»…). Пусто — без категории. */
     val category: String = "",
+    /** Когда удалена в корзину; null — не в корзине. */
+    val deletedAt: Long? = null,
 ) {
     val seriesId get() = if (series == 0L) id else series
 
@@ -85,6 +87,7 @@ class App : Application() {
         Crash.install(this)
         Vault.init(this)
         Backup.init(this)
+        ThemePrefs.init(this)
         Notes.init(this)
         Shared.init(this)
         Sync.init(this)
@@ -103,21 +106,32 @@ interface NoteStore {
 
 /** Хранилище заметок: JSON-файл + StateFlow для экрана и виджета. */
 object Notes : NoteStore {
+    /** Сколько дней заметка лежит в корзине до окончательного удаления. */
+    const val TRASH_DAYS = 30L
+
     private lateinit var app: Context
     private lateinit var file: File
+    private lateinit var trashFile: File
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val state = MutableStateFlow<List<Note>>(emptyList())
     override val notes: StateFlow<List<Note>> = state
+
+    /** Корзина: удалённые заметки, новые сверху. */
+    private val trashState = MutableStateFlow<List<Note>>(emptyList())
+    val trash: StateFlow<List<Note>> = trashState
 
     @Synchronized
     fun init(context: Context) {
         if (::app.isInitialized) return
         app = context.applicationContext
         file = File(app.filesDir, "notes.json")
+        trashFile = File(app.filesDir, "trash.json")
         // Старым заметкам без места — место по текущему порядку
         state.value = sort(load().sortedWith(compareBy<Note> { it.done }.thenByDescending { it.updated })
             .mapIndexed { i, n -> if (n.pos == null) n.copy(pos = i.toDouble()) else n })
         save(state.value)
+        trashState.value = loadTrash()
+        purgeTrash()
     }
 
     override fun get(id: Long): Note? = state.value.find { it.id == id }
@@ -136,13 +150,84 @@ object Notes : NoteStore {
         Reminders.sync(app, note)
     }
 
+    /** Удалить в корзину: заметка и её фото ещё TRASH_DAYS дней восстановимы. */
     @Synchronized
     override fun delete(id: Long) {
         get(id)?.let { n ->
+            Reminders.cancelAll(app, n)
+            trashState.value = (trashState.value.filter { it.id != id } +
+                n.copy(deletedAt = System.currentTimeMillis())).sortedByDescending { it.deletedAt }
+            saveTrash()
+        }
+        commit(state.value.filter { it.id != id })
+    }
+
+    /** Удалить навсегда — из корзины или сразу (надгробие из облака). Фото стираются. */
+    @Synchronized
+    fun deleteForever(id: Long) {
+        (trashState.value.find { it.id == id } ?: get(id))?.let { n ->
             n.attachments.forEach { Attachments.delete(app, it) }
             Reminders.cancelAll(app, n)
         }
+        if (trashState.value.any { it.id == id }) {
+            trashState.value = trashState.value.filter { it.id != id }
+            saveTrash()
+        }
+        if (get(id) != null) commit(state.value.filter { it.id != id })
+    }
+
+    /** Былая заготовка осталась пустой — выбросить мимо корзины. */
+    @Synchronized
+    fun discard(id: Long) {
+        get(id)?.let { n -> n.attachments.forEach { Attachments.delete(app, it) } }
         commit(state.value.filter { it.id != id })
+    }
+
+    /** Вернуть заметку из корзины. */
+    @Synchronized
+    fun restore(id: Long) {
+        val n = trashState.value.find { it.id == id } ?: return
+        trashState.value = trashState.value.filter { it.id != id }
+        saveTrash()
+        upsert(n.copy(deletedAt = null, updated = System.currentTimeMillis()))
+    }
+
+    /** Из облака: на другом устройстве удалили — в корзину со временем той стороны. */
+    @Synchronized
+    fun moveToTrashFromSync(n: Note) {
+        Reminders.cancelAll(app, n)
+        trashState.value = (trashState.value.filter { it.id != n.id } + n)
+            .sortedByDescending { it.deletedAt }
+        saveTrash()
+        commit(state.value.filter { it.id != n.id })
+    }
+
+    /** Из облака: на другом устройстве восстановили из корзины. */
+    @Synchronized
+    fun restoreFromSync(n: Note) {
+        trashState.value = trashState.value.filter { it.id != n.id }
+        saveTrash()
+        upsert(n.copy(deletedAt = null))
+    }
+
+    /** Очистить корзину целиком. */
+    @Synchronized
+    fun emptyTrash() {
+        trashState.value.forEach { n -> n.attachments.forEach { Attachments.delete(app, it) } }
+        trashState.value = emptyList()
+        saveTrash()
+    }
+
+    /** Старше TRASH_DAYS дней — удаляем окончательно (при старте приложения). */
+    @Synchronized
+    fun purgeTrash() {
+        val cutoff = System.currentTimeMillis() - TRASH_DAYS * 86_400_000L
+        val (old, keep) = trashState.value.partition { (it.deletedAt ?: 0L) < cutoff }
+        if (old.isNotEmpty()) {
+            old.forEach { n -> n.attachments.forEach { Attachments.delete(app, it) } }
+            trashState.value = keep
+            saveTrash()
+        }
     }
 
     override fun setDone(id: Long, done: Boolean) {
@@ -195,6 +280,7 @@ object Notes : NoteStore {
     @Synchronized
     fun reload() {
         state.value = sort(load())
+        trashState.value = loadTrash()
         state.value.forEach { Reminders.sync(app, it) }
         refreshWidgets()
     }
@@ -250,6 +336,25 @@ object Notes : NoteStore {
         tmp.renameTo(file)
     }
 
+    private fun loadTrash(): List<Note> {
+        if (!trashFile.exists()) return emptyList()
+        return try {
+            val arr = JSONArray(trashFile.readText())
+            List(arr.length()) { fromJson(arr.getJSONObject(it)) }.sortedByDescending { it.deletedAt }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveTrash() {
+        val arr = JSONArray()
+        trashState.value.forEach { arr.put(toJson(it)) }
+        val tmp = File(trashFile.path + ".tmp")
+        tmp.writeText(arr.toString())
+        tmp.renameTo(trashFile)
+        Sync.onNotesChanged()
+    }
+
     fun toJson(n: Note) = JSONObject()
         .put("id", n.id)
         .put("title", n.title)
@@ -276,6 +381,7 @@ object Notes : NoteStore {
         .apply { n.pos?.let { put("pos", it) } }
         .apply { n.reading?.let { put("rd", it) } }
         .apply { if (n.category.isNotBlank()) put("cat", n.category) }
+        .apply { n.deletedAt?.let { put("del", it) } }
         .apply {
             if (n.attachments.isNotEmpty()) put("att", JSONArray().apply {
                 n.attachments.forEach { put(JSONObject().put("f", it.file).put("n", it.name).put("m", it.mime)) }
@@ -309,6 +415,7 @@ object Notes : NoteStore {
         pos = if (o.has("pos")) o.getDouble("pos") else null,
         reading = if (o.has("rd")) o.getDouble("rd") else null,
         category = o.optString("cat"),
+        deletedAt = if (o.has("del")) o.getLong("del") else null,
         attachments = o.optJSONArray("att")?.let { a ->
             List(a.length()) { i -> a.getJSONObject(i).let { Attachment(it.getString("f"), it.optString("n"), it.optString("m")) } }
         } ?: emptyList(),

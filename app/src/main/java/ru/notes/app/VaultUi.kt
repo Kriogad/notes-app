@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -100,13 +101,33 @@ fun VaultScreen(host: Host, onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: (
     var cat by remember { mutableStateOf<String?>(null) } // null — список категорий, "*" — все заметки
     var importing by remember { mutableStateOf(false) }
     var askNewCat by remember { mutableStateOf(false) }
+    var searching by remember { mutableStateOf(false) }
+    var vaultQuery by remember { mutableStateOf("") }
     BackHandler(onBack = onBack)
+    BackHandler(enabled = searching) { searching = false; vaultQuery = "" }
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Секретный раздел") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") } },
+                title = {
+                    if (searching) {
+                        val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+                        LaunchedEffect(Unit) { focus.requestFocus() }
+                        PlainField(vaultQuery, { vaultQuery = it }, "Поиск по секретке",
+                            MaterialTheme.typography.titleMedium,
+                            Modifier.fillMaxWidth().focusRequester(focus))
+                    } else Text("Секретный раздел")
+                },
+                navigationIcon = {
+                    if (searching) IconButton(onClick = { searching = false; vaultQuery = "" }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад")
+                    } else IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
+                },
                 actions = {
+                    if (unlocked && !searching && tab == 0) {
+                        IconButton(onClick = { searching = true }) {
+                            Icon(androidx.compose.material.icons.Icons.Filled.Search, "Поиск")
+                        }
+                    }
                     if (unlocked) IconButton(onClick = onBack) { Icon(Icons.Filled.Lock, "Закрыть раздел") }
                 },
             )
@@ -169,6 +190,7 @@ fun VaultScreen(host: Host, onBack: () -> Unit, onOpen: (Long) -> Unit, onNew: (
             Box(Modifier.fillMaxSize()) {
                 when {
                     !unlocked -> if (!Vault.exists) CreateVault() else UnlockVault(host)
+                    searching -> VaultSearchResults(vaultQuery, onOpen)
                     tab == 1 -> VaultPhotos()
                     cat != null -> VaultList(host, cat!!, onBackToCats = { cat = null }, onOpen)
                     else -> VaultCategories(host, onPick = { cat = it })
@@ -515,6 +537,28 @@ private fun VaultList(host: Host, cat: String, onBackToCats: () -> Unit, onOpen:
     }
 }
 
+/** Поиск по всем секретным заметкам (название, текст, пункты). */
+@Composable
+private fun VaultSearchResults(query: String, onOpen: (Long) -> Unit) {
+    val notes by Vault.notes.collectAsState()
+    val found = if (query.isBlank()) emptyList() else notes.filter { it.matches(query.trim()) }
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(12.dp, 4.dp, 12.dp, 88.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (found.isEmpty()) item {
+            Text(
+                if (query.isBlank()) "Введите слово для поиска — ищется по названиям, тексту и пунктам."
+                else "Ничего не найдено",
+                color = MaterialTheme.colorScheme.outline, textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+            )
+        }
+        items(found, key = { it.id }) { n -> NoteCard(n, Vault, Modifier.animateItem()) { onOpen(n.id) } }
+    }
+}
+
 // ---------------- Настройки: напоминания ----------------
 
 @Composable
@@ -651,6 +695,7 @@ fun SyncSettings() {
     val code by Sync.code.collectAsState()
     val status by Sync.status.collectAsState()
     var askCode by remember { mutableStateOf(false) }
+    var askChange by remember { mutableStateOf(false) }
     var entered by remember { mutableStateOf("") }
 
     Text("Синхронизация с компьютером", style = MaterialTheme.typography.titleMedium)
@@ -683,9 +728,26 @@ fun SyncSettings() {
         }, modifier = Modifier.fillMaxWidth()) { Text("Отправить ссылку себе") }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { askCode = true }) { Text("Другой код") }
+            OutlinedButton(onClick = { askChange = true }) { Text("Сменить код") }
             TextButton(onClick = { Sync.disable() }) { Text("Выключить") }
         }
     }
+    if (askChange) AlertDialog(
+        onDismissRequest = { askChange = false },
+        title = { Text("Сменить код синхронизации?") },
+        text = { Text("Данные переедут на новый код, а старый перестанет работать — если он попал не туда, доступ будет отрезан. На компьютере нужно будет войти с новым кодом.") },
+        confirmButton = {
+            TextButton(onClick = {
+                askChange = false
+                Sync.changeCode { ok ->
+                    Toast.makeText(ctx,
+                        if (ok != null) "Код сменён, старый больше не работает" else "Не удалось: нет связи",
+                        Toast.LENGTH_LONG).show()
+                }
+            }) { Text("Сменить") }
+        },
+        dismissButton = { TextButton(onClick = { askChange = false }) { Text("Отмена") } },
+    )
     if (status.isNotBlank()) Text(status, color = MaterialTheme.colorScheme.outline)
 
     if (askCode) AlertDialog(
@@ -735,6 +797,16 @@ fun SettingsScreen(host: Host, onBack: () -> Unit) {
             Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            Text("Тема оформления", style = MaterialTheme.typography.titleMedium)
+            val themeMode by ThemePrefs.mode.collectAsState()
+            val themeOptions = listOf(ThemePrefs.SYSTEM, ThemePrefs.LIGHT, ThemePrefs.DARK)
+            SegmentedTabs(
+                tabs = listOf("Системная", "Светлая", "Тёмная"),
+                selected = themeOptions.indexOf(themeMode).coerceAtLeast(0),
+                onSelect = { ThemePrefs.set(themeOptions[it]) },
+            )
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
             Text("Фон главного экрана", style = MaterialTheme.typography.titleMedium)
             val bg by Background.image.collectAsState()
             LaunchedEffect(Unit) { Background.load(ctx) }

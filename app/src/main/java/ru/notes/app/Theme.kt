@@ -8,6 +8,8 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -99,10 +101,39 @@ private val IosShapes = Shapes(
     extraLarge = RoundedCornerShape(20.dp), // диалоги
 )
 
+/** Выбор темы: system / light / dark. Хранится в настройках телефона. */
+object ThemePrefs {
+    const val SYSTEM = "system"
+    const val LIGHT = "light"
+    const val DARK = "dark"
+
+    private var app: android.content.Context? = null
+    val mode = kotlinx.coroutines.flow.MutableStateFlow(SYSTEM)
+
+    fun init(ctx: android.content.Context) {
+        app = ctx.applicationContext
+        mode.value = ctx.applicationContext
+            .getSharedPreferences("theme", android.content.Context.MODE_PRIVATE)
+            .getString("mode", SYSTEM) ?: SYSTEM
+    }
+
+    fun set(m: String) {
+        mode.value = m
+        app?.getSharedPreferences("theme", android.content.Context.MODE_PRIVATE)
+            ?.edit()?.putString("mode", m)?.apply()
+    }
+}
+
 @Composable
 fun NotesTheme(content: @Composable () -> Unit) {
+    val mode by ThemePrefs.mode.collectAsState()
+    val dark = when (mode) {
+        ThemePrefs.LIGHT -> false
+        ThemePrefs.DARK -> true
+        else -> isSystemInDarkTheme()
+    }
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) IosDark else IosLight,
+        colorScheme = if (dark) IosDark else IosLight,
         typography = IosTypography,
         shapes = IosShapes,
         content = content,

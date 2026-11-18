@@ -22,7 +22,8 @@ import java.io.File
  * Полная синхронизация между устройствами и браузером (kriogad.github.io/notes-app/sync.html).
  *
  * Данные: sync/{код}/notes/{id} = {j: json заметки, u: время изменения},
- *         sync/{код}/deleted/{id} = время удаления,
+ *         sync/{код}/trash/{id} = {j: json заметки с "del", u: время удаления},
+ *         sync/{код}/deleted/{id} = время окончательного удаления (надгробие),
  *         sync/{код}/vault = {j: содержимое secret.enc, u: время}.
  *
  * Кто знает код — читает обычные заметки. Секретка хранится в облаке только
@@ -38,6 +39,8 @@ object Sync {
     private lateinit var app: Context
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var db: FirebaseDatabase? = null
+    private var storage: com.google.firebase.storage.FirebaseStorage? = null
+    private var lastPhotoSync = 0L
 
     private val codeState = MutableStateFlow<String?>(null)
     /** Код синхронизации; null — выключена. */
@@ -47,11 +50,13 @@ object Sync {
 
     private var root: DatabaseReference? = null
     private var notesListener: ValueEventListener? = null
+    private var trashListener: ValueEventListener? = null
     private var deletedListener: ValueEventListener? = null
     private var vaultListener: ValueEventListener? = null
 
     /** Последнее известное облачное состояние: id → (updated to json); защита от эха и детект удалений. */
     private val pushed = mutableMapOf<String, Pair<Long, String>>()
+    private val pushedTrash = mutableMapOf<String, Pair<Long, String>>()
     private var pushedVault: String? = null
     private var pushJob: Job? = null
     private var vaultPushJob: Job? = null
@@ -62,6 +67,8 @@ object Sync {
         app = ctx.applicationContext
         if (FirebaseApp.getApps(app).isEmpty()) return
         db = runCatching { FirebaseDatabase.getInstance(DB_URL) }.getOrNull() ?: return
+        // Фото вложений — через Storage; если в консоли не включён, просто не синхронизируются
+        storage = runCatching { com.google.firebase.storage.FirebaseStorage.getInstance() }.getOrNull()
         prefs().getString("code", null)?.let { start(it) }
     }
 
@@ -83,11 +90,34 @@ object Sync {
 
     fun disable() {
         stop()
-        prefs().edit().remove("code").remove("vault_u").apply()
+        prefs().edit().remove("code").remove("vault_u").remove("sent").apply()
         codeState.value = null
         status.value = ""
         pushed.clear()
+        pushedTrash.clear()
         pushedVault = null
+    }
+
+    /**
+     * Сменить код: данные переезжают на новый код, старый стирается из базы —
+     * по старому коду войти больше нельзя. null — не удалось (нет сети).
+     */
+    fun changeCode(onDone: (String?) -> Unit) {
+        val r = root ?: run { onDone(null); return }
+        val d = db ?: run { onDone(null); return }
+        val newCode = (1..12).map { alphabet.random() }.joinToString("")
+        status.value = "Переношу данные на новый код…"
+        r.get().addOnSuccessListener { snap ->
+            d.reference.child("sync").child(newCode).setValue(snap.value).addOnSuccessListener {
+                r.removeValue()
+                prefs().edit().putString("code", newCode).remove("sent").apply()
+                pushed.clear()
+                pushedTrash.clear()
+                pushedVault = null
+                start(newCode)
+                onDone(newCode)
+            }.addOnFailureListener { status.value = "Не удалось: нет связи"; onDone(null) }
+        }.addOnFailureListener { status.value = "Не удалось: нет связи"; onDone(null) }
     }
 
     private fun start(c: String) {
@@ -110,6 +140,19 @@ object Sync {
             override fun onCancelled(e: DatabaseError) { status.value = "Нет связи с облаком" }
         }
         r.child("notes").addValueEventListener(notesListener!!)
+
+        trashListener = object : ValueEventListener {
+            override fun onDataChange(s: DataSnapshot) {
+                for (ch in s.children) {
+                    val id = ch.key?.toLongOrNull() ?: continue
+                    val j = ch.child("j").getValue(String::class.java) ?: continue
+                    val u = ch.child("u").getValue(Long::class.java) ?: continue
+                    applyRemoteTrash(id, j, u)
+                }
+            }
+            override fun onCancelled(e: DatabaseError) {}
+        }
+        r.child("trash").addValueEventListener(trashListener!!)
 
         deletedListener = object : ValueEventListener {
             override fun onDataChange(s: DataSnapshot) {
@@ -135,15 +178,17 @@ object Sync {
 
         onNotesChanged()
         onVaultChanged()
+        syncPhotos(force = true)
     }
 
     private fun stop() {
         root?.let { r ->
             notesListener?.let { r.child("notes").removeEventListener(it) }
+            trashListener?.let { r.child("trash").removeEventListener(it) }
             deletedListener?.let { r.child("deleted").removeEventListener(it) }
             vaultListener?.let { r.child("vault").removeEventListener(it) }
         }
-        notesListener = null; deletedListener = null; vaultListener = null; root = null
+        notesListener = null; trashListener = null; deletedListener = null; vaultListener = null; root = null
     }
 
     // ---------- локальные правки → облако ----------
@@ -161,19 +206,78 @@ object Sync {
     private fun pushNotes() {
         val r = root ?: return
         val now = System.currentTimeMillis()
-        val current = Notes.notes.value.associateBy { it.id.toString() }
-        // Удалённые локально — надгробие, чтобы облако и другие устройства тоже удалили
-        (pushed.keys - current.keys).forEach { id ->
+        val active = Notes.notes.value.associateBy { it.id.toString() }
+        val trash = Notes.trash.value.associateBy { it.id.toString() }
+        // Исчезли отовсюду — окончательно удалены: надгробие для всех устройств
+        ((pushed.keys + pushedTrash.keys) - active.keys - trash.keys).forEach { id ->
             pushed.remove(id)
+            pushedTrash.remove(id)
             r.child("notes").child(id).removeValue()
+            r.child("trash").child(id).removeValue()
             r.child("deleted").child(id).setValue(now)
         }
-        // Новые и изменённые
-        current.forEach { (id, n) ->
+        // Ушли из корзины (восстановили) — чистим узел корзины, в notes зальётся ниже
+        (pushedTrash.keys - trash.keys).forEach { id ->
+            pushedTrash.remove(id)
+            r.child("trash").child(id).removeValue()
+        }
+        // Ушли из активных (в корзину) — чистим узел заметок, в корзину зальётся ниже
+        (pushed.keys - active.keys).forEach { id ->
+            pushed.remove(id)
+            r.child("notes").child(id).removeValue()
+        }
+        // Новые и изменённые активные
+        active.forEach { (id, n) ->
             val j = Notes.toJson(n).toString()
             if (pushed[id] != (n.updated to j)) {
                 pushed[id] = n.updated to j
                 r.child("notes").child(id).setValue(mapOf("j" to j, "u" to n.updated))
+            }
+        }
+        // Корзина: ключ времени — момент удаления
+        trash.forEach { (id, n) ->
+            val j = Notes.toJson(n).toString()
+            val u = n.deletedAt ?: now
+            if (pushedTrash[id] != (u to j)) {
+                pushedTrash[id] = u to j
+                r.child("trash").child(id).setValue(mapOf("j" to j, "u" to u))
+            }
+        }
+        syncPhotos()
+    }
+
+    // ---------- фото и вложения (Firebase Storage) ----------
+
+    /**
+     * Файлы вложений (обычные и зашифрованные .enc) ↔ Storage: sync/{код}/files/{имя}.
+     * Зашифрованные едут как есть — в облаке они нечитаемы. Чаще раза в 30 секунд не дергаем.
+     */
+    private fun syncPhotos(force: Boolean = false) {
+        val st = storage ?: return
+        val c = codeState.value ?: return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastPhotoSync < 30_000) return
+        lastPhotoSync = now
+        val dir = Attachments.dir(app)
+        val ref = st.reference.child("sync").child(c).child("files")
+        val sent = prefs().getStringSet("sent", emptySet())!!.toMutableSet()
+        // Залить новые локальные
+        dir.listFiles().orEmpty().filter { it.name !in sent }.forEach { f ->
+            ref.child(f.name).putFile(android.net.Uri.fromFile(f)).addOnSuccessListener {
+                sent += f.name
+                prefs().edit().putStringSet("sent", sent.toSet()).apply()
+            }
+        }
+        // Скачать те, что есть в облаке, но нет локально
+        ref.listAll().addOnSuccessListener { list ->
+            list.items.forEach { item ->
+                val local = File(dir, item.name)
+                if (local.exists()) return@forEach
+                item.getFile(local).addOnSuccessListener {
+                    sent += item.name
+                    prefs().edit().putStringSet("sent", sent.toSet()).apply()
+                    Notes.refreshWidgets()
+                }
             }
         }
     }
@@ -199,29 +303,62 @@ object Sync {
     // ---------- облако → локально ----------
 
     private fun applyRemoteNote(id: Long, j: String, u: Long) {
+        val remote = runCatching { Notes.fromJson(JSONObject(j)).copy(updated = u, deletedAt = null) }.getOrNull() ?: return
+        if (Notes.trash.value.any { it.id == id }) {
+            // На другом устройстве восстановили из корзины
+            pushedTrash.remove(id.toString())
+            pushed[id.toString()] = u to j
+            Notes.restoreFromSync(remote)
+            return
+        }
         val local = Notes.get(id)
         if (local != null && local.updated > u) {
             // Локальная версия новее — зальём её при ближайшей отправке
             pushed[id.toString()] = u to j
             return
         }
-        val newJson = runCatching { Notes.toJson(Notes.fromJson(JSONObject(j))).toString() }.getOrNull()
-        if (local != null && newJson != null && Notes.toJson(local).toString() == newJson) {
+        if (local != null && Notes.toJson(local).toString() == Notes.toJson(remote).toString()) {
             pushed[id.toString()] = u to j
             return
         }
         pushed[id.toString()] = u to j
         runCatching {
-            Notes.upsert(Notes.fromJson(JSONObject(j)).copy(updated = u))
+            Notes.upsert(remote)
             status.value = "Обновлено с другого устройства"
         }
     }
 
+    /** На другом устройстве заметку отправили в корзину. */
+    private fun applyRemoteTrash(id: Long, j: String, u: Long) {
+        val inTrash = Notes.trash.value.any { it.id == id }
+        val local = Notes.get(id)
+        if (inTrash) { pushedTrash[id.toString()] = u to j; return }
+        if (local != null && local.updated > u) {
+            // Наша правка свежее удаления — зальём её обратно
+            pushedTrash[id.toString()] = u to j
+            return
+        }
+        pushedTrash[id.toString()] = u to j
+        pushed.remove(id.toString())
+        runCatching {
+            Notes.moveToTrashFromSync(Notes.fromJson(JSONObject(j)))
+            status.value = "Обновлено с другого устройства"
+        }
+    }
+
+    /** Окончательное удаление (очистка корзины или удаление навсегда). */
     private fun applyRemoteDelete(id: Long, at: Long) {
-        val local = Notes.get(id) ?: return
-        if (local.updated <= at) {
-            pushed.remove(id.toString())
-            Notes.delete(id)
+        val inTrash = Notes.trash.value.any { it.id == id }
+        val local = Notes.get(id)
+        when {
+            inTrash -> {
+                pushedTrash.remove(id.toString())
+                Notes.deleteForever(id)
+            }
+            local != null && local.updated <= at -> {
+                pushed.remove(id.toString())
+                Notes.deleteForever(id)
+            }
         }
     }
 

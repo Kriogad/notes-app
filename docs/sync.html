@@ -46,6 +46,10 @@
   .vdel:hover { color: var(--danger); }
   .edit { background: none; color: var(--dim); padding: 2px 8px; font-size: 16px; }
   .edit:hover { color: var(--accent); }
+  .thumb { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; margin: 6px 6px 0 0; cursor: pointer; background: var(--field); }
+  .vgrid { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  .vgrid img { width: 110px; height: 110px; object-fit: cover; border-radius: 12px; cursor: pointer; background: var(--field); }
+  .cat-big { margin: 18px 0 4px; color: var(--accent); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -70,12 +74,14 @@
     <div class="top">
       <div class="row">
         <h1 class="grow" style="margin:0">📝 Мои заметки</h1>
+        <button class="ghost mini" id="notifyBtn" onclick="toggleNotify()" title="Уведомления о напоминаниях (вкладка должна быть открыта)">🔕</button>
         <button class="ghost mini" onclick="disconnect()">Выйти</button>
       </div>
       <p class="dim">Код: <span class="code" id="syncCode"></span></p>
       <div class="tabs">
         <button id="tabNotes" class="on" onclick="showTab('notes')">Заметки</button>
         <button id="tabVault" onclick="showTab('vault')">🔒 Секретка</button>
+        <button id="tabTrash" onclick="showTab('trash')">🗑 Корзина</button>
       </div>
     </div>
 
@@ -100,6 +106,12 @@
         </div>
         <p class="dim" id="edStatus" style="margin-top:8px; font-size:13px"></p>
       </div>
+    </div>
+
+    <!-- корзина -->
+    <div id="paneTrash" style="display:none">
+      <p class="dim" style="margin:8px 0">Удалённые хранятся 30 дней, потом стираются сами.</p>
+      <div id="trashList"></div>
     </div>
 
     <!-- секретка -->
@@ -140,6 +152,7 @@
         </div>
 
         <div id="vaultList"></div>
+        <div id="vaultPhotos"></div>
         <button style="width:100%; margin-top:10px" onclick="vNew()">＋ Добавить запись</button>
       </div>
     </div>
@@ -152,18 +165,24 @@
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getDatabase, ref, onValue, set, remove }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+  import { getStorage, ref as sref, getDownloadURL, getBytes }
+    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
-  const db = getDatabase(initializeApp({
+  const app = initializeApp({
     apiKey: "AIzaSyB139PGLC2e8c8wNrZu5EFRwWDi-3RQaCE",
     projectId: "notes-shared-6503f",
     databaseURL: "https://notes-shared-6503f-default-rtdb.europe-west1.firebasedatabase.app",
-  }));
+    storageBucket: "notes-shared-6503f.firebasestorage.app",
+  });
+  const db = getDatabase(app);
+  const storage = getStorage(app);
 
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
-  let code = null, notes = {}, vaultRaw = null, unsubNotes = null, unsubVault = null;
+  let code = null, notes = {}, trashNotes = {}, vaultRaw = null, unsubNotes = null, unsubVault = null, unsubTrash = null;
   let editing = null, saveTimer = null, applyingRemote = false;
+  let notifyOn = localStorage.getItem("notesNotify") === "1";
   // секретка
   let vaultKey = null, vaultSalt = "", vaultHint = "", vaultPhotos = null;
   let vaultNotes = [], lastWrittenVault = null, vEditing = null, vSaveTimer = null, vApplying = false;
@@ -184,14 +203,16 @@
     $("home").style.display = "none";
     $("main").style.display = "block";
     $("syncCode").textContent = c;
+    updateNotifyBtn();
     subscribe();
   }
 
   function disconnect() {
     if (unsubNotes) unsubNotes();
     if (unsubVault) unsubVault();
+    if (unsubTrash) unsubTrash();
     lockVault();
-    code = null; notes = {}; vaultRaw = null; editing = null;
+    code = null; notes = {}; trashNotes = {}; vaultRaw = null; editing = null;
     localStorage.removeItem("notesSyncCode");
     history.replaceState(null, "", location.pathname);
     $("main").style.display = "none";
@@ -208,6 +229,16 @@
       });
       renderNotes();
       if (editing && notes[editing] && !saveTimer) fillEditor(notes[editing]);
+      checkReminders();
+    });
+    unsubTrash = onValue(ref(db, `sync/${code}/trash`), snap => {
+      trashNotes = {};
+      snap.forEach(c => {
+        const v = c.val();
+        if (!v || !v.j) return;
+        try { trashNotes[c.key] = JSON.parse(v.j); } catch (e) {}
+      });
+      renderTrash();
     });
     unsubVault = onValue(ref(db, `sync/${code}/vault`), snap => {
       const j = snap.val()?.j ?? null;
@@ -241,6 +272,22 @@
       const preview = n.text || items.map(i => (i.c ? "✓ " : "· ") + i.t).join("  ");
       d.innerHTML = `<div class="nt">${esc(n.title || firstLine(n) || "Без названия")}</div>` +
         (preview ? `<div class="np">${esc(preview)}</div>` : "");
+      // Превью фото-вложений (синхронизируются через Storage)
+      const photos = (n.att || []).filter(a => a.m && a.m.startsWith("image/") && !a.f.endsWith(".enc"));
+      if (photos.length) {
+        const row = document.createElement("div");
+        photos.forEach(a => {
+          const img = document.createElement("img");
+          img.className = "thumb";
+          img.alt = a.n || "фото";
+          getDownloadURL(sref(storage, `sync/${code}/files/${a.f}`))
+            .then(u => { img.src = u; })
+            .catch(() => { img.title = "Фото ещё не загружено телефоном"; });
+          img.onclick = e => { e.stopPropagation(); if (img.src) window.open(img.src, "_blank"); };
+          row.appendChild(img);
+        });
+        d.appendChild(row);
+      }
       d.onclick = () => openEditor(String(n.id));
       box.appendChild(d);
     });
@@ -299,12 +346,16 @@
 
   async function deleteNote() {
     if (!editing) return;
-    if (!confirm("Удалить заметку? На телефоне она тоже удалится.")) return;
+    if (!confirm("Удалить заметку в корзину? 30 дней её можно будет восстановить.")) return;
     const id = editing;
+    const n = notes[id];
     closeEditor();
+    if (n) {
+      n.del = Date.now();
+      await set(ref(db, `sync/${code}/trash/${id}`), { j: JSON.stringify(n), u: n.del });
+    }
     await remove(ref(db, `sync/${code}/notes/${id}`));
-    await set(ref(db, `sync/${code}/deleted/${id}`), Date.now());
-    toast("Удалено");
+    toast("В корзине");
   }
 
   function scheduleSave() {
@@ -333,6 +384,82 @@
     $("edStatus").textContent = "Сохранено " + new Date().toLocaleTimeString("ru-RU");
     renderNotes();
   }
+
+  // ---------- корзина ----------
+
+  function renderTrash() {
+    const box = $("trashList");
+    if (!box) return;
+    const list = Object.values(trashNotes).sort((a, b) => (b.del ?? 0) - (a.del ?? 0));
+    box.innerHTML = list.length ? "" : "<p class='dim'>Корзина пуста.</p>";
+    list.forEach(n => {
+      const d = document.createElement("div");
+      d.className = "card";
+      const when = n.del ? new Date(n.del).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+      d.innerHTML = `<div class="row"><div class="grow"><div class="nt" style="font-weight:600">${esc(n.title || firstLine(n) || "Без названия")}</div>` +
+        `<div class="dim" style="font-size:13px">Удалена ${when}</div></div>` +
+        `<button class="ghost mini" data-act="restore">Вернуть</button>` +
+        `<button class="ghost mini vdel" data-act="forever">✕</button></div>`;
+      d.querySelector('[data-act="restore"]').onclick = async () => {
+        delete n.del;
+        n.updated = Date.now();
+        await set(ref(db, `sync/${code}/notes/${n.id}`), { j: JSON.stringify(n), u: n.updated });
+        await remove(ref(db, `sync/${code}/trash/${n.id}`));
+        toast("Восстановлено");
+      };
+      d.querySelector('[data-act="forever"]').onclick = async () => {
+        if (!confirm("Удалить навсегда? Восстановить будет нельзя.")) return;
+        await remove(ref(db, `sync/${code}/trash/${n.id}`));
+        await set(ref(db, `sync/${code}/deleted/${n.id}`), Date.now());
+      };
+      box.appendChild(d);
+    });
+  }
+
+  // ---------- напоминания в браузере ----------
+
+  function toggleNotify() {
+    if (notifyOn) {
+      notifyOn = false;
+      localStorage.setItem("notesNotify", "0");
+      updateNotifyBtn();
+      toast("Уведомления выключены");
+      return;
+    }
+    if (!("Notification" in window)) { toast("Браузер не умеет уведомления"); return; }
+    Notification.requestPermission().then(p => {
+      if (p === "granted") {
+        notifyOn = true;
+        localStorage.setItem("notesNotify", "1");
+        updateNotifyBtn();
+        toast("Уведомления включены — держите вкладку открытой");
+        checkReminders();
+      } else toast("Браузер не дал разрешения");
+    });
+  }
+
+  function updateNotifyBtn() { $("notifyBtn").textContent = notifyOn ? "🔔" : "🔕"; }
+
+  function checkReminders() {
+    if (!notifyOn || !("Notification" in window) || Notification.permission !== "granted") return;
+    const now = Date.now();
+    const seen = JSON.parse(localStorage.getItem("notesNotified") || "[]");
+    let changed = false;
+    Object.values(notes).forEach(n => {
+      if (n.done) return;
+      const events = [];
+      if (n.remind) events.push([n.id + "n" + n.remind, n.remind, n.title || firstLine(n)]);
+      (n.items || []).forEach(it => { if (it.r && !it.c) events.push([n.id + "i" + (it.i || it.t) + it.r, it.r, it.t]); });
+      events.forEach(([k, at, text]) => {
+        if (at <= now && !seen.includes(k)) {
+          seen.push(k); changed = true;
+          new Notification("🔔 Заметки", { body: text || "Напоминание" });
+        }
+      });
+    });
+    if (changed) localStorage.setItem("notesNotified", JSON.stringify(seen.slice(-300)));
+  }
+  setInterval(checkReminders, 30000);
 
   // ---------- секретка ----------
 
@@ -369,6 +496,7 @@
       vaultNotes = JSON.parse(new TextDecoder().decode(plain));
       $("vaultPass").value = "";
       renderVault();
+      renderVaultPhotos();
       $("vaultLocked").style.display = "none";
       $("vaultOpen").style.display = "block";
     } catch (e) {
@@ -377,12 +505,42 @@
   }
 
   function lockVault() {
-    vaultKey = null; vaultNotes = []; vEditing = null; lastWrittenVault = null;
+    vaultKey = null; vaultNotes = []; vEditing = null; lastWrittenVault = null; vaultPhotos = null;
     clearTimeout(vSaveTimer); vSaveTimer = null;
     $("vaultOpen").style.display = "none";
     $("vaultLocked").style.display = "block";
     $("vaultList").innerHTML = "";
     $("vaultEditor").style.display = "none";
+    $("vaultPhotos").innerHTML = "";
+  }
+
+  /** Секретные фото: качаем зашифрованными и расшифровываем в браузере тем же ключом. */
+  async function renderVaultPhotos() {
+    const box = $("vaultPhotos");
+    box.innerHTML = "";
+    if (!vaultPhotos || !vaultPhotos.length) return;
+    const h = document.createElement("div");
+    h.className = "cat-big";
+    h.textContent = "📷 Фото";
+    box.appendChild(h);
+    const grid = document.createElement("div");
+    grid.className = "vgrid";
+    box.appendChild(grid);
+    for (const p of vaultPhotos) {
+      const img = document.createElement("img");
+      img.alt = "секретное фото";
+      grid.appendChild(img);
+      try {
+        const bytes = await getBytes(sref(storage, `sync/${code}/files/${p.file}`));
+        const plain = await crypto.subtle.decrypt(
+          { name: "AES-GCM", iv: bytes.slice(0, 12) }, vaultKey, bytes.slice(12));
+        const url = URL.createObjectURL(new Blob([plain], { type: "image/jpeg" }));
+        img.src = url;
+        img.onclick = () => window.open(url, "_blank");
+      } catch (e) {
+        img.title = "Фото ещё не синхронизировано телефоном";
+      }
+    }
   }
 
   function renderVault() {
@@ -532,9 +690,12 @@
   function showTab(t) {
     $("tabNotes").classList.toggle("on", t === "notes");
     $("tabVault").classList.toggle("on", t === "vault");
+    $("tabTrash").classList.toggle("on", t === "trash");
     $("paneNotes").style.display = t === "notes" ? "block" : "none";
     $("paneVault").style.display = t === "vault" ? "block" : "none";
+    $("paneTrash").style.display = t === "trash" ? "block" : "none";
     if (t === "vault") renderVaultHint();
+    if (t === "trash") renderTrash();
   }
 
   // авто-вход по ссылке / сохранённому коду
@@ -545,7 +706,7 @@
   window.connect = connect; window.disconnect = disconnect; window.showTab = showTab;
   window.newNote = newNote; window.addItem = addItem; window.toggleDone = toggleDone;
   window.deleteNote = deleteNote; window.closeEditor = closeEditor; window.scheduleSave = scheduleSave;
-  window.unlockVault = unlockVault; window.lockVault = lockVault;
+  window.unlockVault = unlockVault; window.lockVault = lockVault; window.toggleNotify = toggleNotify;
   window.vNew = vNew; window.vAddItem = vAddItem; window.vDelete = vDelete;
   window.vCloseEditor = vCloseEditor; window.vScheduleSave = vScheduleSave;
 </script>

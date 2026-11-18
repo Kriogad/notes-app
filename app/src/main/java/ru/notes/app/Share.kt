@@ -61,6 +61,86 @@ object Share {
         intent.putExtra(Intent.EXTRA_TEXT, text(n))
         ctx.startActivity(Intent.createChooser(intent, "Отправить заметку").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
+
+    // ---------- экспорт файлом ----------
+
+    private fun safeName(n: Note) = n.displayTitle.replace(Regex("[^\\wА-Яа-яЁё .\\-]"), "").trim()
+        .ifBlank { "заметка" }.take(60)
+
+    private fun exportDir(ctx: Context) = java.io.File(ctx.cacheDir, "exports").apply { mkdirs() }
+
+    private fun shareFile(ctx: Context, f: java.io.File, mime: String, title: String) {
+        val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.files", f)
+        val intent = Intent(Intent.ACTION_SEND).setType(mime)
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        ctx.startActivity(Intent.createChooser(intent, title).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    /** Заметка текстовым файлом. */
+    fun exportTxt(ctx: Context, n: Note) {
+        runCatching {
+            val f = java.io.File(exportDir(ctx), safeName(n) + ".txt")
+            f.writeText(text(n))
+            shareFile(ctx, f, "text/plain", "Экспорт заметки")
+        }.onFailure { Toast.makeText(ctx, "Не удалось сохранить файл", Toast.LENGTH_LONG).show() }
+    }
+
+    /** Заметка в PDF (текст и пункты; вложения не включаются). */
+    fun exportPdf(ctx: Context, n: Note) {
+        runCatching {
+            val pageW = 595; val pageH = 842; val margin = 56f
+            val doc = android.graphics.pdf.PdfDocument()
+            val titlePaint = android.graphics.Paint().apply {
+                textSize = 22f; isFakeBoldText = true; color = android.graphics.Color.BLACK
+            }
+            val bodyPaint = android.graphics.Paint().apply { textSize = 14f; color = android.graphics.Color.BLACK }
+            val dimPaint = android.graphics.Paint().apply { textSize = 11f; color = android.graphics.Color.GRAY }
+            var pageNum = 1
+            var page = doc.startPage(android.graphics.pdf.PdfDocument.PageInfo.Builder(pageW, pageH, pageNum).build())
+            var y = margin
+
+            fun newPage() {
+                doc.finishPage(page)
+                pageNum++
+                page = doc.startPage(android.graphics.pdf.PdfDocument.PageInfo.Builder(pageW, pageH, pageNum).build())
+                y = margin
+            }
+
+            fun drawLines(raw: String, paint: android.graphics.Paint, indent: Float = 0f) {
+                val maxW = pageW - margin * 2 - indent
+                raw.split("\n").forEach { paragraph ->
+                    var line = paragraph
+                    if (line.isEmpty()) { y += paint.textSize * 0.7f; return@forEach }
+                    while (line.isNotEmpty()) {
+                        val count = paint.breakText(line, true, maxW, null)
+                        if (y > pageH - margin) newPage()
+                        page.canvas.drawText(line.substring(0, count), margin + indent, y, paint)
+                        y += paint.textSize * 1.35f
+                        line = line.substring(count)
+                    }
+                }
+            }
+
+            if (n.title.isNotBlank()) { drawLines(n.title, titlePaint); y += 10f }
+            if (n.text.isNotBlank()) { drawLines(n.text, bodyPaint); y += 8f }
+            n.items.filter { it.text.isNotBlank() }.forEach {
+                drawLines((if (it.checked) "☑ " else "☐ ") + it.text, bodyPaint)
+            }
+            if (n.attachments.isNotEmpty()) {
+                y += 8f
+                drawLines("Вложений: ${n.attachments.size} (в PDF не включаются)", dimPaint)
+            }
+            y = pageH - margin / 2
+            page.canvas.drawText("Приложение «Заметки» · Kriogad", margin, y, dimPaint)
+            doc.finishPage(page)
+
+            val f = java.io.File(exportDir(ctx), safeName(n) + ".pdf")
+            f.outputStream().use { doc.writeTo(it) }
+            doc.close()
+            shareFile(ctx, f, "application/pdf", "Экспорт заметки")
+        }.onFailure { Toast.makeText(ctx, "Не удалось собрать PDF", Toast.LENGTH_LONG).show() }
+    }
 }
 
 /** «Поделиться» из других приложений → в новую или выбранную заметку. */
@@ -76,14 +156,7 @@ class ShareActivity : ComponentActivity() {
         if (text.isEmpty() && uris.isEmpty()) { finish(); return }
 
         setContent {
-            val dark = isSystemInDarkTheme()
-            val ctx = LocalContext.current
-            val colors = when {
-                Build.VERSION.SDK_INT >= 31 -> if (dark) dynamicDarkColorScheme(ctx) else dynamicLightColorScheme(ctx)
-                dark -> darkColorScheme()
-                else -> lightColorScheme()
-            }
-            MaterialTheme(colorScheme = colors) {
+            NotesTheme {
                 val scope = rememberCoroutineScope()
                 val notes by Notes.notes.collectAsState()
                 var busy by remember { mutableStateOf(false) }
