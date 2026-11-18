@@ -2,6 +2,7 @@ package ru.notes.app
 
 import android.content.Context
 import com.google.firebase.FirebaseApp
+import com.google.firebase.database.ChildEventListener
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.DatabaseReference
@@ -24,7 +25,8 @@ import java.io.File
  * Данные: sync/{код}/notes/{id} = {j: json заметки, u: время изменения},
  *         sync/{код}/trash/{id} = {j: json заметки с "del", u: время удаления},
  *         sync/{код}/deleted/{id} = время окончательного удаления (надгробие),
- *         sync/{код}/vault = {j: содержимое secret.enc, u: время}.
+ *         sync/{код}/vault = {j: содержимое secret.enc, u: время},
+ *         sync/{код}/files/{имя с %2E вместо точки} = base64 файла вложения.
  *
  * Кто знает код — читает обычные заметки. Секретка хранится в облаке только
  * в зашифрованном виде (файл secret.enc как есть); пароль никуда не отправляется,
@@ -39,8 +41,7 @@ object Sync {
     private lateinit var app: Context
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var db: FirebaseDatabase? = null
-    private var storage: com.google.firebase.storage.FirebaseStorage? = null
-    private var lastPhotoSync = 0L
+    private var lastFileSync = 0L
 
     private val codeState = MutableStateFlow<String?>(null)
     /** Код синхронизации; null — выключена. */
@@ -53,6 +54,9 @@ object Sync {
     private var trashListener: ValueEventListener? = null
     private var deletedListener: ValueEventListener? = null
     private var vaultListener: ValueEventListener? = null
+    private var filesListener: ChildEventListener? = null
+    /** Имена файлов, которые уже есть в облаке. */
+    private val remoteFiles = mutableSetOf<String>()
 
     /** Последнее известное облачное состояние: id → (updated to json); защита от эха и детект удалений. */
     private val pushed = mutableMapOf<String, Pair<Long, String>>()
@@ -67,8 +71,6 @@ object Sync {
         app = ctx.applicationContext
         if (FirebaseApp.getApps(app).isEmpty()) return
         db = runCatching { FirebaseDatabase.getInstance(DB_URL) }.getOrNull() ?: return
-        // Фото вложений — через Storage; если в консоли не включён, просто не синхронизируются
-        storage = runCatching { com.google.firebase.storage.FirebaseStorage.getInstance() }.getOrNull()
         prefs().getString("code", null)?.let { start(it) }
     }
 
@@ -176,9 +178,11 @@ object Sync {
         }
         r.child("vault").addValueEventListener(vaultListener!!)
 
+        attachFiles(r)
+
         onNotesChanged()
         onVaultChanged()
-        syncPhotos(force = true)
+        syncFiles(force = true)
     }
 
     private fun stop() {
@@ -187,8 +191,10 @@ object Sync {
             trashListener?.let { r.child("trash").removeEventListener(it) }
             deletedListener?.let { r.child("deleted").removeEventListener(it) }
             vaultListener?.let { r.child("vault").removeEventListener(it) }
+            filesListener?.let { r.child("files").removeEventListener(it) }
         }
-        notesListener = null; trashListener = null; deletedListener = null; vaultListener = null; root = null
+        notesListener = null; trashListener = null; deletedListener = null; vaultListener = null
+        filesListener = null; remoteFiles.clear(); root = null
     }
 
     // ---------- локальные правки → облако ----------
@@ -243,43 +249,75 @@ object Sync {
                 r.child("trash").child(id).setValue(mapOf("j" to j, "u" to u))
             }
         }
-        syncPhotos()
+        syncFiles()
     }
 
-    // ---------- фото и вложения (Firebase Storage) ----------
+    // ---------- фото и вложения (Realtime Database, base64) ----------
 
-    /**
-     * Файлы вложений (обычные и зашифрованные .enc) ↔ Storage: sync/{код}/files/{имя}.
-     * Зашифрованные едут как есть — в облаке они нечитаемы. Чаще раза в 30 секунд не дергаем.
-     */
-    private fun syncPhotos(force: Boolean = false) {
-        val st = storage ?: return
-        val c = codeState.value ?: return
-        val now = System.currentTimeMillis()
-        if (!force && now - lastPhotoSync < 30_000) return
-        lastPhotoSync = now
-        val dir = Attachments.dir(app)
-        val ref = st.reference.child("sync").child(c).child("files")
-        val sent = prefs().getStringSet("sent", emptySet())!!.toMutableSet()
-        // Залить новые локальные
-        dir.listFiles().orEmpty().filter { it.name !in sent }.forEach { f ->
-            ref.child(f.name).putFile(android.net.Uri.fromFile(f)).addOnSuccessListener {
-                sent += f.name
-                prefs().edit().putStringSet("sent", sent.toSet()).apply()
-            }
-        }
-        // Скачать те, что есть в облаке, но нет локально
-        ref.listAll().addOnSuccessListener { list ->
-            list.items.forEach { item ->
-                val local = File(dir, item.name)
-                if (local.exists()) return@forEach
-                item.getFile(local).addOnSuccessListener {
-                    sent += item.name
-                    prefs().edit().putStringSet("sent", sent.toSet()).apply()
-                    Notes.refreshWidgets()
+    /** Имя файла → ключ узла (в ключах Firebase нельзя точку). */
+    private fun encName(n: String) = n.replace(".", "%2E")
+    private fun decName(k: String) = k.replace("%2E", ".")
+
+    /** Слушаем облачные файлы: качаем те, которых нет локально. */
+    private fun attachFiles(r: DatabaseReference) {
+        filesListener = object : ChildEventListener {
+            override fun onChildAdded(s: DataSnapshot, prev: String?) = onFile(s)
+            override fun onChildChanged(s: DataSnapshot, prev: String?) = onFile(s)
+            override fun onChildRemoved(s: DataSnapshot) { s.key?.let { remoteFiles.remove(decName(it)) } }
+            override fun onChildMoved(s: DataSnapshot, prev: String?) {}
+            override fun onCancelled(e: DatabaseError) {}
+            private fun onFile(s: DataSnapshot) {
+                val name = s.key?.let { decName(it) } ?: return
+                remoteFiles += name
+                val local = File(Attachments.dir(app), name)
+                if (local.exists()) return
+                val b64 = s.getValue(String::class.java) ?: return
+                scope.launch {
+                    runCatching {
+                        local.writeBytes(android.util.Base64.decode(b64, android.util.Base64.NO_WRAP))
+                        Notes.refreshWidgets()
+                    }
                 }
             }
         }
+        r.child("files").addChildEventListener(filesListener!!)
+    }
+
+    /**
+     * Файлы вложений (обычные и зашифрованные .enc) ↔ база: sync/{код}/files/{имя} = base64.
+     * Зашифрованные едут как есть — в облаке они нечитаемы. Чаще раза в 30 секунд не дёргаем.
+     */
+    private fun syncFiles(force: Boolean = false) {
+        val r = root ?: return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastFileSync < 30_000) return
+        lastFileSync = now
+        val dir = Attachments.dir(app)
+        val sent = prefs().getStringSet("sent", emptySet())!!.toMutableSet()
+        // Залить новые локальные
+        dir.listFiles().orEmpty()
+            .filter { it.name !in sent && it.name !in remoteFiles }
+            .forEach { f ->
+                val b64 = runCatching { encodeForSync(f) }.getOrNull() ?: return@forEach
+                r.child("files").child(encName(f.name)).setValue(b64).addOnSuccessListener {
+                    sent += f.name
+                    prefs().edit().putStringSet("sent", sent.toSet()).apply()
+                }
+            }
+    }
+
+    /** Картинки сжимаем (JPEG, до 1280px), остальное — как есть; тяжелее ~7 МБ не отправляем. */
+    private fun encodeForSync(f: File): String? {
+        var bytes = f.readBytes()
+        if (!f.name.endsWith(".enc") && bytes.size > 300_000) {
+            Images.decode(bytes, 1280)?.let { bmp ->
+                val out = java.io.ByteArrayOutputStream()
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 72, out)
+                if (out.size() < bytes.size) bytes = out.toByteArray()
+            }
+        }
+        if (bytes.size > 7_000_000) return null
+        return android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
     }
 
     /** Вызывается из Vault при каждой записи секретного файла. */

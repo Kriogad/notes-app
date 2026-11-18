@@ -163,19 +163,15 @@
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getDatabase, ref, onValue, set, remove }
+  import { getDatabase, ref, onValue, set, remove, get }
     from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
-  import { getStorage, ref as sref, getDownloadURL, getBytes }
-    from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
   const app = initializeApp({
     apiKey: "AIzaSyB139PGLC2e8c8wNrZu5EFRwWDi-3RQaCE",
     projectId: "notes-shared-6503f",
     databaseURL: "https://notes-shared-6503f-default-rtdb.europe-west1.firebasedatabase.app",
-    storageBucket: "notes-shared-6503f.firebasestorage.app",
   });
   const db = getDatabase(app);
-  const storage = getStorage(app);
 
   const $ = id => document.getElementById(id);
   const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -250,6 +246,21 @@
     });
   }
 
+  // ---------- файлы вложений (base64 в базе) ----------
+
+  // Имя файла → ключ узла (в ключах Firebase нельзя точку) — как в приложении
+  const encKey = n => String(n).replace(/\./g, "%2E");
+  const fileUrlCache = {}; // имя → data URL (только успешные загрузки)
+  /** Скачать файл вложения из базы как data URL; null — ещё не залито телефоном. */
+  function fileUrl(name) {
+    if (fileUrlCache[name]) return Promise.resolve(fileUrlCache[name]);
+    return get(ref(db, `sync/${code}/files/${encKey(name)}`)).then(s => {
+      const b = s.val();
+      if (b) fileUrlCache[name] = "data:image/jpeg;base64," + b;
+      return fileUrlCache[name] || null;
+    }).catch(() => null);
+  }
+
   // ---------- обычные заметки ----------
 
   function sortedNotes() {
@@ -272,7 +283,7 @@
       const preview = n.text || items.map(i => (i.c ? "✓ " : "· ") + i.t).join("  ");
       d.innerHTML = `<div class="nt">${esc(n.title || firstLine(n) || "Без названия")}</div>` +
         (preview ? `<div class="np">${esc(preview)}</div>` : "");
-      // Превью фото-вложений (синхронизируются через Storage)
+      // Превью фото-вложений (синхронизируются base64 через базу)
       const photos = (n.att || []).filter(a => a.m && a.m.startsWith("image/") && !a.f.endsWith(".enc"));
       if (photos.length) {
         const row = document.createElement("div");
@@ -280,9 +291,10 @@
           const img = document.createElement("img");
           img.className = "thumb";
           img.alt = a.n || "фото";
-          getDownloadURL(sref(storage, `sync/${code}/files/${a.f}`))
-            .then(u => { img.src = u; })
-            .catch(() => { img.title = "Фото ещё не загружено телефоном"; });
+          fileUrl(a.f).then(u => {
+            if (u) img.src = u;
+            else img.title = "Фото ещё не загружено телефоном";
+          });
           img.onclick = e => { e.stopPropagation(); if (img.src) window.open(img.src, "_blank"); };
           row.appendChild(img);
         });
@@ -531,7 +543,9 @@
       img.alt = "секретное фото";
       grid.appendChild(img);
       try {
-        const bytes = await getBytes(sref(storage, `sync/${code}/files/${p.file}`));
+        const b = await get(ref(db, `sync/${code}/files/${encKey(p.file)}`)).then(s => s.val());
+        if (!b) throw new Error("нет файла");
+        const bytes = b64(b);
         const plain = await crypto.subtle.decrypt(
           { name: "AES-GCM", iv: bytes.slice(0, 12) }, vaultKey, bytes.slice(12));
         const url = URL.createObjectURL(new Blob([plain], { type: "image/jpeg" }));
