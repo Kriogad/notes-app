@@ -98,7 +98,7 @@ object Share {
             val bodyPaint = android.graphics.Paint().apply { textSize = 14f; color = android.graphics.Color.BLACK }
             val dimPaint = android.graphics.Paint().apply { textSize = 11f; color = android.graphics.Color.GRAY }
             var pageNum = 1
-            fun startPage() = doc.startPage(PdfDocument.PageInfo.Builder(pageW, pageH, pageNum).build())
+            fun startPage() = doc.startPage(PdfDocument.PageInfo.Builder(pageW, pageH, pageNum).create())
             var page = startPage()
             var y = margin
 
