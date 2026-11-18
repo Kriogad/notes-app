@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -256,7 +257,7 @@ fun SharedProjectScreen(host: Host, code: String, onBack: () -> Unit) {
             }
             // Добавление пункта: текстом или голосом
             Row(
-                Modifier.fillMaxWidth().padding(12.dp),
+                Modifier.fillMaxWidth().imePadding().padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
