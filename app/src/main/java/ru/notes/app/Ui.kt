@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.size
@@ -442,7 +443,7 @@ private fun NoteList(list: List<Note>, empty: String, modifier: Modifier, host: 
             contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 88.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            items(shown, key = { it.id }) { note ->
+            itemsIndexed(shown, key = { _, it -> it.id }) { idx, note ->
                 val isDragged = dragging == note.id
                 val drag = if (!canDrag) Modifier else Modifier.pointerInput(note.id) {
                     detectDragGesturesAfterLongPress(
@@ -504,7 +505,7 @@ private fun NoteList(list: List<Note>, empty: String, modifier: Modifier, host: 
                         }
                     },
                 ) {
-                    NoteCard(note, Notes, Modifier, maxItems, onAdd = { adding = note.id },
+                    NoteCard(note, Notes, Modifier, maxItems, number = idx + 1, onAdd = { adding = note.id },
                         onDelete = { deleting = note }) { onOpen(note.id) }
                 }
             }
@@ -578,6 +579,7 @@ fun NoteCard(
     store: NoteStore,
     modifier: Modifier,
     maxItems: Int = 4,
+    number: Int? = null,
     onAdd: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     onClick: () -> Unit,
@@ -602,6 +604,15 @@ fun NoteCard(
             CircleCheck(checked = note.done, onToggle = { store.setDone(note.id, it) })
             Column(Modifier.weight(1f).padding(top = 12.dp).alpha(if (note.done) 0.6f else 1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (number != null) {
+                        Text(
+                            "$number.",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            modifier = Modifier.padding(end = 6.dp),
+                        )
+                    }
                     Text(
                         note.displayTitle,
                         style = MaterialTheme.typography.titleMedium.strike(note.done),
