@@ -58,6 +58,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.zIndex
@@ -96,6 +97,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -990,11 +992,31 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                 }
             }
 
-            note.items.forEachIndexed { i, item ->
+            // Перетаскивание пунктов: тяни за «≡» справа; порядок сохраняется, когда отпустил
+            var dragOrder by remember { mutableStateOf<List<CheckItem>?>(null) }
+            var dragId by remember { mutableStateOf<Long?>(null) }
+            var dragOff by remember { mutableStateOf(0f) }
+            val itemHeights = remember { mutableStateMapOf<Long, Float>() }
+            val hapticItems = LocalHapticFeedback.current
+            val shownItems = dragOrder ?: note.items
+
+            shownItems.forEachIndexed { i, item ->
                 fun update(new: CheckItem?) {
-                    note = note.copy(items = note.items.toMutableList().apply { if (new == null) removeAt(i) else set(i, new) })
+                    val base = (dragOrder ?: note.items).toMutableList()
+                        .apply { if (new == null) removeAt(i) else set(i, new) }
+                    if (dragOrder != null) dragOrder = base else note = note.copy(items = base)
                 }
+                Column(
+                    Modifier.onGloballyPositioned { itemHeights[item.id] = it.size.height.toFloat() }
+                        .then(
+                            if (dragId == item.id) Modifier.zIndex(1f).graphicsLayer {
+                                translationY = dragOff; shadowElevation = 12f
+                            } else Modifier
+                        )
+                ) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp)) {
+                    Text("${i + 1}.", style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.outline, modifier = Modifier.width(26.dp))
                     Checkbox(item.checked, { update(item.copy(checked = it)) })
                     PlainField(
                         item.text, { update(item.copy(text = it)) }, "Пункт",
@@ -1005,6 +1027,50 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                             tint = if (item.remindAt != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
                     }
                     IconButton(onClick = { update(null) }) { Icon(Icons.Filled.Close, "Удалить пункт") }
+                    // Ручка перетаскивания
+                    Text(
+                        "≡",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = if (dragId == item.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                            .pointerInput(item.id) {
+                                detectDragGestures(
+                                    onDragStart = {
+                                        hapticItems.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        dragOrder = (dragOrder ?: note.items); dragId = item.id; dragOff = 0f
+                                    },
+                                    onDrag = { change, amount ->
+                                        change.consume()
+                                        dragOff += amount.y
+                                        val order = dragOrder ?: return@detectDragGestures
+                                        val cur = order.indexOfFirst { it.id == dragId }
+                                        if (cur < 0) return@detectDragGestures
+                                        if (dragOff > 0 && cur < order.lastIndex) {
+                                            val nh = itemHeights[order[cur + 1].id] ?: return@detectDragGestures
+                                            if (dragOff > nh / 2) {
+                                                dragOrder = order.toMutableList().apply {
+                                                    val t = this[cur]; this[cur] = this[cur + 1]; this[cur + 1] = t
+                                                }
+                                                dragOff -= nh
+                                            }
+                                        } else if (dragOff < 0 && cur > 0) {
+                                            val ph = itemHeights[order[cur - 1].id] ?: return@detectDragGestures
+                                            if (-dragOff > ph / 2) {
+                                                dragOrder = order.toMutableList().apply {
+                                                    val t = this[cur]; this[cur] = this[cur - 1]; this[cur - 1] = t
+                                                }
+                                                dragOff += ph
+                                            }
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        dragOrder?.let { note = note.copy(items = it) }
+                                        dragOrder = null; dragId = null; dragOff = 0f
+                                    },
+                                    onDragCancel = { dragOrder = null; dragId = null; dragOff = 0f },
+                                )
+                            },
+                    )
                 }
                 item.remindAt?.let { at ->
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 52.dp)) {
@@ -1016,6 +1082,7 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                             Text("убрать", style = MaterialTheme.typography.labelMedium)
                         }
                     }
+                }
                 }
             }
             Row(Modifier.padding(start = 8.dp)) {
