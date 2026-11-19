@@ -1009,9 +1009,11 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                 Column(
                     Modifier.onGloballyPositioned { itemHeights[item.id] = it.size.height.toFloat() }
                         .then(
-                            if (dragId == item.id) Modifier.zIndex(1f).graphicsLayer {
-                                translationY = dragOff; shadowElevation = 12f
-                            } else Modifier
+                            if (dragId == item.id) Modifier.zIndex(1f)
+                                .background(MaterialTheme.colorScheme.surface)
+                                .graphicsLayer {
+                                    translationY = dragOff; shadowElevation = 12f
+                                } else Modifier
                         )
                 ) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp)) {
@@ -1027,13 +1029,14 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                             tint = if (item.remindAt != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
                     }
                     IconButton(onClick = { update(null) }) { Icon(Icons.Filled.Close, "Удалить пункт") }
-                    // Ручка перетаскивания
+                    // Ручка перетаскивания (жест живёт, пока палец на экране, даже если пункты меняются местами)
                     Text(
                         "≡",
                         style = MaterialTheme.typography.titleLarge,
                         color = if (dragId == item.id) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
-                            .pointerInput(item.id) {
+                            .pointerInput(Unit) {
+                                try {
                                 detectDragGestures(
                                     onDragStart = {
                                         hapticItems.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1069,6 +1072,13 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                                     },
                                     onDragCancel = { dragOrder = null; dragId = null; dragOff = 0f },
                                 )
+                                } finally {
+                                    // Страховка: при обрыве жеста не оставляем строку «висеть» поверх других
+                                    if (dragId != null) {
+                                        dragOrder?.let { note = note.copy(items = it) }
+                                        dragOrder = null; dragId = null; dragOff = 0f
+                                    }
+                                }
                             },
                     )
                 }
