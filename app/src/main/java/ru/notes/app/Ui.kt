@@ -820,7 +820,8 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
         }
     }
 
-    // Автосохранение: через полсекунды после правки и при выходе
+    // Автосохранение: через полсекунды после правки и при выходе.
+    // В секретке — только вручную кнопкой «Сохранить»: случайная правка не должна затирать пароли.
     var finished by remember { mutableStateOf(false) }
     fun persist() {
         if (finished) return
@@ -831,18 +832,34 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
             !note.sameContent(stored) -> store.upsert(note.copy(updated = System.currentTimeMillis()))
         }
     }
-    LaunchedEffect(note) { delay(500); persist() }
-    DisposableEffect(Unit) { onDispose { persist() } }
-    BackHandler(onBack = onClose)
+    if (!secret) {
+        LaunchedEffect(note) { delay(500); persist() }
+        DisposableEffect(Unit) { onDispose { persist() } }
+    }
+    // Несохранённые правки в секретке
+    val secretDirty = secret && run {
+        val stored = store.get(id)
+        if (stored == null) !note.isBlank else !note.sameContent(stored)
+    }
+    var askDiscard by remember { mutableStateOf(false) }
+    fun closeEditor() { if (secretDirty) askDiscard = true else onClose() }
+    BackHandler(onBack = { closeEditor() })
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {},
                 navigationIcon = {
-                    IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
+                    IconButton(onClick = { closeEditor() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") }
                 },
                 actions = {
+                    // Секретка сохраняется только по явной кнопке
+                    if (secret) {
+                        TextButton(
+                            enabled = secretDirty,
+                            onClick = { persist(); Toast.makeText(ctx, "Сохранено", Toast.LENGTH_SHORT).show() },
+                        ) { Text("Сохранить") }
+                    }
                     IconButton(onClick = {
                         host.listen { t ->
                             val before = note.remindAt
@@ -1116,6 +1133,17 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
         }
     }
 
+    if (askDiscard) AlertDialog(
+        onDismissRequest = { askDiscard = false },
+        title = { Text("Сохранить изменения?") },
+        text = { Text("В записи есть несохранённые правки — без «Сохранить» они пропадут.") },
+        confirmButton = {
+            TextButton(onClick = { askDiscard = false; persist(); finished = true; onClose() }) { Text("Сохранить") }
+        },
+        dismissButton = {
+            TextButton(onClick = { askDiscard = false; finished = true; onClose() }) { Text("Не сохранять") }
+        },
+    )
     if (askDelete) AlertDialog(
         onDismissRequest = { askDelete = false },
         title = { Text("Удалить заметку?") },
