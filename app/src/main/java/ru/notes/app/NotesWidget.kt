@@ -94,7 +94,8 @@ class NotesWidget : GlanceAppWidget() {
                                 GlanceModifier.defaultWeight().padding(vertical = 6.dp)
                                     .clickable(actionStartActivity<MainActivity>(actionParametersOf(KeyOpen to note.id))),
                                 TextStyle(
-                                    onSurface, fontSize = (15 * scale).sp,
+                                    if (note.urgent) GlanceTheme.colors.error else onSurface,
+                                    fontSize = (15 * scale).sp,
                                     textDecoration = if (note.done) TextDecoration.LineThrough else TextDecoration.None,
                                 ),
                                 maxLines = 2,

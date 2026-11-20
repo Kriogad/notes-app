@@ -163,7 +163,8 @@ class NoteWidget : GlanceAppWidget() {
                 GlanceText(
                     note.displayTitle + count,
                     GlanceModifier.defaultWeight().clickable(open),
-                    TextStyle(onSurface, fontSize = (18 * scale).sp, fontWeight = FontWeight.Bold),
+                    TextStyle(if (note.urgent) GlanceTheme.colors.error else onSurface,
+                        fontSize = (18 * scale).sp, fontWeight = FontWeight.Bold),
                     maxLines = 1,
                 )
                 if (note.items.any { it.checked }) {
@@ -186,8 +187,9 @@ class NoteWidget : GlanceAppWidget() {
                     colorFilter = ColorFilter.tint(GlanceTheme.colors.onSurfaceVariant),
                 )
             }
-            // Невыполненные пункты сверху, отмеченные — вниз (как в списке покупок)
-            val rows = note.items.withIndex().filter { it.value.text.isNotBlank() }.sortedBy { it.value.checked }
+            // Невыполненные пункты сверху (срочные первыми), отмеченные — вниз
+            val rows = note.items.withIndex().filter { it.value.text.isNotBlank() }
+                .sortedWith(compareBy({ it.value.checked }, { !it.value.urgent }))
             GlanceLazyColumn {
                 if (note.text.isNotBlank()) item(-1L) {
                     GlanceText(note.text, GlanceModifier.glancePadding(vertical = 4.dp).clickable(open),
@@ -201,7 +203,8 @@ class NoteWidget : GlanceAppWidget() {
                         ),
                         text = item.text,
                         style = TextStyle(
-                            onSurface, fontSize = (15 * scale).sp,
+                            if (item.urgent && !item.checked) GlanceTheme.colors.error else onSurface,
+                            fontSize = (15 * scale).sp,
                             textDecoration = if (item.checked) TextDecoration.LineThrough else TextDecoration.None,
                         ),
                         maxLines = 2,
