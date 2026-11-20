@@ -41,11 +41,13 @@ class VoiceActivity : ComponentActivity() {
         val note = Notes.get(intent.getLongExtra(EXTRA_VOICE_TO, -1))
         if (note != null) {
             val new = splitItems(text).map { DateParser.item(it) }
-            Notes.upsert(note.copy(items = note.items.filter { it.text.isNotBlank() } + new))
+            val (urgent, rest) = new.partition { it.urgent }
+            Notes.upsert(note.copy(items = urgent + note.items.filter { it.text.isNotBlank() } + rest))
             Toast.makeText(this, "Добавлено: " + new.joinToString(", ") { it.text }, Toast.LENGTH_SHORT).show()
             DateParser.toast(this, new)
         } else {
-            val n = DateParser.apply(Note(System.currentTimeMillis(), text = text.replaceFirstChar { it.uppercase() }), text)
+            val (t, urg) = DateParser.stripUrgent(text)
+            val n = DateParser.apply(Note(System.currentTimeMillis(), text = t.replaceFirstChar { it.uppercase() }, urgent = urg), t)
             Notes.upsert(n)
             Toast.makeText(this, "Заметка сохранена", Toast.LENGTH_SHORT).show()
             DateParser.toast(this, emptyList(), n)

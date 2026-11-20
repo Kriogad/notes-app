@@ -145,10 +145,18 @@ object DateParser {
         return result(at, rep)
     }
 
-    /** Пункт с напоминанием, если во фразе есть дата/время. */
+    /** Убирает из фразы слово «срочно» и возвращает (очищенный текст, была ли пометка). */
+    fun stripUrgent(s: String): Pair<String, Boolean> {
+        val re = Regex("(?iu)\\b(?:очень\\s+)?срочно\\b[\\s,:!]*")
+        if (!re.containsMatchIn(s)) return s to false
+        return s.replaceFirst(re, "").replace(Regex("\\s{2,}"), " ").trim() to true
+    }
+
+    /** Пункт с напоминанием, если во фразе есть дата/время. Слово «срочно» помечает пункт и убирается из текста. */
     fun item(text: String): CheckItem {
-        val r = parse(text) ?: return CheckItem(text)
-        return CheckItem(text, remindAt = r.at, repeat = r.repeat)
+        val (t, urg) = stripUrgent(text)
+        val r = parse(t) ?: return CheckItem(t, urgent = urg)
+        return CheckItem(t, remindAt = r.at, repeat = r.repeat, urgent = urg)
     }
 
     /** Заметке без напоминания — напоминание из текста. */

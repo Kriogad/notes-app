@@ -266,6 +266,7 @@
   function sortedNotes() {
     return Object.values(notes).sort((a, b) =>
       ((a.done ? 1 : 0) - (b.done ? 1 : 0)) ||
+      ((b.urg ? 1 : 0) - (a.urg ? 1 : 0)) ||
       ((a.pos ?? 9e15) - (b.pos ?? 9e15)) ||
       ((b.updated ?? 0) - (a.updated ?? 0)));
   }
@@ -281,7 +282,7 @@
       d.className = "card note" + (n.done ? " done" : "");
       const items = (n.items || []).filter(i => i.t);
       const preview = n.text || items.map(i => (i.c ? "✓ " : "· ") + i.t).join("  ");
-      d.innerHTML = `<div class="nt">${esc(n.title || firstLine(n) || "Без названия")}</div>` +
+      d.innerHTML = `<div class="nt"${n.urg && !n.done ? ' style="color:#d32f2f"' : ""}>${esc(n.title || firstLine(n) || "Без названия")}</div>` +
         (preview ? `<div class="np">${esc(preview)}</div>` : "");
       // Превью фото-вложений (синхронизируются base64 через базу)
       const photos = (n.att || []).filter(a => a.m && a.m.startsWith("image/") && !a.f.endsWith(".enc"));

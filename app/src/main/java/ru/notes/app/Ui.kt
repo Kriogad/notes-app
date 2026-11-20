@@ -610,7 +610,7 @@ fun NoteCard(
                         Text(
                             "$number.",
                             style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = if (note.urgent && !note.done) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                             modifier = Modifier.padding(end = 6.dp),
                         )
@@ -618,6 +618,7 @@ fun NoteCard(
                     Text(
                         note.displayTitle,
                         style = MaterialTheme.typography.titleMedium.strike(note.done),
+                        color = if (note.urgent && !note.done) MaterialTheme.colorScheme.error else Color.Unspecified,
                         maxLines = 1, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
                     )
@@ -639,7 +640,7 @@ fun NoteCard(
                 }
                 // Невыполненные пункты первыми — их важнее видеть.
                 // Не влезли — прокрутка внутри карточки, полоса прокрутки справа.
-                val items = note.items.sortedBy { it.checked }
+                val items = note.items.sortedWith(compareBy({ it.checked }, { !it.urgent }))
                 if (items.isNotEmpty()) {
                     val scroll = rememberScrollState()
                     val density = LocalDensity.current
@@ -658,6 +659,7 @@ fun NoteCard(
                                         (if (isVault && !revealed) "••••••••" else item.text) +
                                         (item.remindAt?.let { r -> "  🔔 " + formatTime(r) } ?: ""),
                                     style = MaterialTheme.typography.bodyMedium.strike(item.checked),
+                                    color = if (item.urgent && !item.checked) MaterialTheme.colorScheme.error else Color.Unspecified,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.fillMaxWidth().clickable { toggle(item) }.padding(vertical = 3.dp),
                                 )
@@ -753,7 +755,8 @@ private fun QuickAdd(noteId: Long, host: Host, onDismiss: () -> Unit) {
         if (new.isEmpty()) return
         DateParser.toast(ctx, new)
         val n = Notes.get(noteId) ?: return
-        Notes.upsert(n.copy(items = n.items.filter { it.text.isNotBlank() } + new))
+        val (urgent, rest) = new.partition { it.urgent }
+        Notes.upsert(n.copy(items = urgent + n.items.filter { it.text.isNotBlank() } + rest))
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -863,7 +866,8 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                     IconButton(onClick = {
                         host.listen { t ->
                             val before = note.remindAt
-                            note = DateParser.apply(note.copy(text = if (note.text.isBlank()) t else note.text.trimEnd() + "\n" + t), t)
+                            val (txt, urg) = DateParser.stripUrgent(t)
+                            note = DateParser.apply(note.copy(urgent = note.urgent || urg, text = if (note.text.isBlank()) txt else note.text.trimEnd() + "\n" + txt), txt)
                             if (before == null && !secret) DateParser.toast(ctx, emptyList(), note)
                         }
                     }) { Icon(painterResource(R.drawable.ic_mic), "Надиктовать текст") }
@@ -909,6 +913,15 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                     AssistChip(
                         onClick = { catDialog = true },
                         label = { Text(if (note.category.isBlank()) "🏷 Категория…" else "🏷 ${note.category}") },
+                    )
+                    // «Срочно»: красный заголовок и первое место в списке
+                    AssistChip(
+                        onClick = { note = note.copy(urgent = !note.urgent) },
+                        modifier = Modifier.padding(start = 8.dp),
+                        label = {
+                            Text(if (note.urgent) "❗ Срочно" else "Срочно",
+                                color = if (note.urgent) MaterialTheme.colorScheme.error else Color.Unspecified)
+                        },
                     )
                 }
                 if (catDialog) {
@@ -1035,11 +1048,15 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                 ) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp)) {
                     Text("${i + 1}.", style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.outline, modifier = Modifier.width(26.dp))
+                        // Тап по номеру — пометить/снять «срочно»
+                        color = if (item.urgent) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.width(26.dp).clickable { update(item.copy(urgent = !item.urgent)) })
                     Checkbox(item.checked, { update(item.copy(checked = it)) })
                     PlainField(
                         item.text, { update(item.copy(text = it)) }, "Пункт",
-                        MaterialTheme.typography.bodyLarge.strike(item.checked), Modifier.weight(1f),
+                        MaterialTheme.typography.bodyLarge.strike(item.checked)
+                            .let { s -> if (item.urgent) s.copy(color = MaterialTheme.colorScheme.error) else s },
+                        Modifier.weight(1f),
                     )
                     if (!secret) IconButton(onClick = { target = item.id; pickDate = true }) {
                         Icon(Icons.Filled.Notifications, "Напоминание для пункта",
@@ -1120,8 +1137,12 @@ private fun EditorScreen(id: Long, store: NoteStore, secret: Boolean, host: Host
                 // «молоко, хлеб и яйца» → три пункта
                 TextButton(onClick = {
                     host.listen { t ->
-                        val new = splitItems(t).map { if (secret) CheckItem(it) else DateParser.item(it) }
-                        note = note.copy(items = note.items.filter { it.text.isNotBlank() } + new)
+                        val new = splitItems(t).map {
+                            if (secret) { val (txt, u) = DateParser.stripUrgent(it); CheckItem(txt, urgent = u) }
+                            else DateParser.item(it)
+                        }
+                        val (urgent, rest) = new.partition { it.urgent }
+                        note = note.copy(items = urgent + note.items.filter { it.text.isNotBlank() } + rest)
                         DateParser.toast(ctx, new)
                     }
                 }) {

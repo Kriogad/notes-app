@@ -23,6 +23,8 @@ data class CheckItem(
     val sound: String? = null,
     /** Своя громкость, %; null — как в настройках. */
     val volume: Int? = null,
+    /** Срочный: красный текст и первое место среди невыполненных. */
+    val urgent: Boolean = false,
 )
 
 /** Вложение: файл лежит в filesDir/attachments/[file], [name] — исходное имя для показа. */
@@ -58,6 +60,8 @@ data class Note(
     val category: String = "",
     /** Когда удалена в корзину; null — не в корзине. */
     val deletedAt: Long? = null,
+    /** Срочная: красный заголовок и первое место среди невыполненных. */
+    val urgent: Boolean = false,
 ) {
     val seriesId get() = if (series == 0L) id else series
 
@@ -294,7 +298,7 @@ object Notes : NoteStore {
 
     // Невыполненные сверху, внутри — в порядке, который задал пользователь
     private fun sort(list: List<Note>) =
-        list.sortedWith(compareBy<Note> { it.done }.thenBy { it.pos ?: 0.0 })
+        list.sortedWith(compareBy<Note> { it.done }.thenBy { !it.urgent }.thenBy { it.pos ?: 0.0 })
 
     /** Новый порядок после перетаскивания: те же места, переставленные между этими заметками. */
     @Synchronized
@@ -368,6 +372,7 @@ object Notes : NoteStore {
                     if (it.repeat != Repeat.NONE) put("rep", it.repeat.key)
                     it.sound?.let { s -> put("snd", s) }
                     it.volume?.let { v -> put("vol", v) }
+                    if (it.urgent) put("urg", true)
                 })
             }
         })
@@ -382,6 +387,7 @@ object Notes : NoteStore {
         .apply { n.reading?.let { put("rd", it) } }
         .apply { if (n.category.isNotBlank()) put("cat", n.category) }
         .apply { n.deletedAt?.let { put("del", it) } }
+        .apply { if (n.urgent) put("urg", true) }
         .apply {
             if (n.attachments.isNotEmpty()) put("att", JSONArray().apply {
                 n.attachments.forEach { put(JSONObject().put("f", it.file).put("n", it.name).put("m", it.mime)) }
@@ -398,7 +404,8 @@ object Notes : NoteStore {
                     val item = CheckItem(it.optString("t"), it.optBoolean("c"),
                         remindAt = if (it.has("r")) it.getLong("r") else null, repeat = Repeat.of(it.optString("rep")),
                         sound = if (it.has("snd")) it.getString("snd") else null,
-                        volume = if (it.has("vol")) it.getInt("vol") else null)
+                        volume = if (it.has("vol")) it.getInt("vol") else null,
+                        urgent = it.optBoolean("urg"))
                     if (it.has("i")) item.copy(id = it.getLong("i")) else item
                 }
             }
@@ -416,6 +423,7 @@ object Notes : NoteStore {
         reading = if (o.has("rd")) o.getDouble("rd") else null,
         category = o.optString("cat"),
         deletedAt = if (o.has("del")) o.getLong("del") else null,
+        urgent = o.optBoolean("urg"),
         attachments = o.optJSONArray("att")?.let { a ->
             List(a.length()) { i -> a.getJSONObject(i).let { Attachment(it.getString("f"), it.optString("n"), it.optString("m")) } }
         } ?: emptyList(),
