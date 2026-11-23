@@ -36,6 +36,7 @@
   .chk .box { width: 20px; height: 20px; border: 2px solid var(--dim); border-radius: 6px; flex: none; display: grid; place-items: center; font-size: 13px; color: #111; }
   .chk.done .box { background: var(--accent); border-color: var(--accent); }
   .chk.done .txt { text-decoration: line-through; color: var(--dim); }
+  .urgent { color: var(--danger); }
   .chk .del { margin-left: auto; color: var(--dim); background: none; padding: 2px 8px; font-size: 16px; }
   .chk .del:hover { color: var(--danger); }
   .cat { margin: 18px 0 6px; color: var(--accent); font-weight: 600; }
@@ -281,9 +282,13 @@
       const d = document.createElement("div");
       d.className = "card note" + (n.done ? " done" : "");
       const items = (n.items || []).filter(i => i.t);
-      const preview = n.text || items.map(i => (i.c ? "✓ " : "· ") + i.t).join("  ");
-      d.innerHTML = `<div class="nt"${n.urg && !n.done ? ' style="color:#d32f2f"' : ""}>${esc(n.title || firstLine(n) || "Без названия")}</div>` +
-        (preview ? `<div class="np">${esc(preview)}</div>` : "");
+      items.sort((a, b) => Number(Boolean(a.c)) - Number(Boolean(b.c)) ||
+        Number(Boolean(b.urg)) - Number(Boolean(a.urg)));
+      const preview = n.text ? esc(n.text) : items.map(i =>
+        `<span${i.urg && !i.c ? ' class="urgent"' : ""}>${i.c ? "✓ " : "· "}${esc(i.t)}</span>`
+      ).join("  ");
+      d.innerHTML = `<div class="nt${n.urg && !n.done ? " urgent" : ""}">${esc(n.title || firstLine(n) || "Без названия")}</div>` +
+        (preview ? `<div class="np">${preview}</div>` : "");
       // Превью фото-вложений (синхронизируются base64 через базу)
       const photos = (n.att || []).filter(a => a.m && a.m.startsWith("image/") && !a.f.endsWith(".enc"));
       if (photos.length) {
@@ -324,7 +329,7 @@
     (n.items || []).forEach((it, idx) => {
       const row = document.createElement("div");
       row.className = "chk" + (it.c ? " done" : "");
-      row.innerHTML = `<span class="box">${it.c ? "✓" : ""}</span><span class="txt">${esc(it.t)}</span><button class="del">✕</button>`;
+      row.innerHTML = `<span class="box">${it.c ? "✓" : ""}</span><span class="txt${it.urg && !it.c ? " urgent" : ""}">${esc(it.t)}</span><button class="del">✕</button>`;
       row.onclick = () => { it.c = !it.c; saveNow(); fillEditor(notes[editing]); };
       row.querySelector(".del").onclick = e => { e.stopPropagation(); notes[editing].items.splice(idx, 1); saveNow(); fillEditor(notes[editing]); };
       box.appendChild(row);
